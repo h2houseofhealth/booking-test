@@ -307,22 +307,48 @@
             <h3>Member &amp; User Discounts</h3>
           </div>
           <p class="membership-copy">
-            Review members and logged-in users. Add missing contact details, then apply a service discount by phone.
+            Search users, select the ones you want, or add a new user, then apply a service discount by phone.
           </p>
           <div class="admin-discount-finder">
-            <label>
-              Search Users
-              <input id="adminDiscountUserSearch" type="text" placeholder="Search by name, email, or phone" />
-            </label>
-            <label>
-              Select User
-              <select id="adminDiscountUserSelect">
-                <option value="">Choose a user</option>
-              </select>
-            </label>
+            <div class="admin-discount-dropdown">
+              <div class="admin-discount-search-wrap">
+                <label class="admin-discount-search">
+                  Search users
+                  <input id="adminDiscountUserSearch" type="text" placeholder="Search users..." />
+                </label>
+                <div id="adminDiscountDropdown" class="admin-discount-dropdown-panel" hidden>
+                  <div id="adminDiscountUserResults" class="admin-discount-user-results"></div>
+                  <div id="adminDiscountUsersEmpty" class="admin-discount-no-results" hidden>
+                    <p>No users found.</p>
+                  </div>
+                  <div class="admin-discount-create-inline">
+                    <h4>Add New User</h4>
+                    <label>
+                      Name
+                      <input id="adminDiscountNewName" type="text" placeholder="Name" />
+                    </label>
+                    <label>
+                      Email
+                      <input id="adminDiscountNewEmail" type="email" placeholder="Email" />
+                    </label>
+                    <label>
+                      Phone
+                      <input id="adminDiscountNewPhone" type="tel" placeholder="Phone" />
+                    </label>
+                    <button id="adminDiscountAddNewBtn" class="btn btn-primary" type="button">Add + Select</button>
+                  </div>
+                </div>
+              </div>
+              <div class="admin-discount-apply">
+                <span id="adminDiscountSelectedCount" class="admin-discount-selected-count">0 selected</span>
+                <label>
+                  Discount %
+                  <input id="adminDiscountBulkPercent" type="number" min="1" max="100" step="1" placeholder="10" />
+                </label>
+                <button id="adminDiscountBulkApplyBtn" class="btn btn-primary" type="button">Apply Discount</button>
+              </div>
+            </div>
           </div>
-          <div id="adminDiscountUsersList" class="admin-discount-user-list"></div>
-          <p id="adminDiscountUsersEmpty" class="empty-state">No users found.</p>
           <div class="admin-discount-manual">
             <h4>Manual Discount</h4>
             <form id="adminDiscountForm" class="admin-discount-form">

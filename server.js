@@ -1404,23 +1404,61 @@ app.get('/api/admin/doctors', requireAuth, requireAdmin, (_req, res) => {
 });
 
 app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
-  const users = db
-    .prepare(
-      `SELECT id,
-              name,
-              email,
-              mobile,
-              membership_status AS membershipStatus,
-              membership_plan AS membershipPlan,
-              membership_expires_at AS membershipExpiresAt,
-              membership_people_count AS membershipPeopleCount
-       FROM users
-       WHERE role = 'user'
-       ORDER BY name COLLATE NOCASE ASC, id ASC`
-    )
-    .all();
+  const search = String(_req.query?.search || '').trim().toLowerCase();
+  let query = `
+    SELECT id,
+           name,
+           email,
+           mobile,
+           membership_status AS membershipStatus,
+           membership_plan AS membershipPlan,
+           membership_expires_at AS membershipExpiresAt,
+           membership_people_count AS membershipPeopleCount
+    FROM users
+    WHERE role = 'user'
+  `;
+  const params = [];
+  if (search) {
+    const like = `%${search}%`;
+    query += ` AND (
+      LOWER(name) LIKE ? OR
+      LOWER(email) LIKE ? OR
+      mobile LIKE ?
+    )`;
+    params.push(like, like, like);
+  }
+  query += ' ORDER BY name COLLATE NOCASE ASC, id ASC';
+  const users = db.prepare(query).all(...params);
 
   res.json({ users });
+});
+
+app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const mobile = String(req.body?.mobile || '').trim();
+
+  if (!name || !email || !mobile) {
+    return res.status(400).json({ message: 'Name, email, and phone are required.' });
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ message: 'A valid email address is required.' });
+  }
+
+  const result = resolveAdminCustomerContext({
+    customerName: name,
+    customerEmail: email,
+    customerPhone: mobile,
+    createIfMissing: true,
+  });
+  if (result?.error) {
+    return res.status(400).json({ message: result.error });
+  }
+  if (!result?.user) {
+    return res.status(500).json({ message: 'Unable to create user.' });
+  }
+
+  return res.json({ user: result.user, created: Boolean(result.createdUser) });
 });
 
 app.post('/api/admin/discount-access', requireAuth, requireAdmin, (req, res) => {

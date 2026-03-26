@@ -45,7 +45,10 @@ const state = {
   slotAvailabilityLoading: false,
   adminDiscountUnlocked: false,
   adminDiscountSearch: '',
-  adminDiscountSelectedUserId: '',
+  adminDiscountDropdownOpen: false,
+  adminDiscountSearchResults: [],
+  adminDiscountSearchLoading: false,
+  adminDiscountSelectedUsers: [],
   filters: {
     search: '',
     status: 'all',
@@ -174,10 +177,17 @@ const elements = {
   adminDiscountGateBtn: document.getElementById('adminDiscountGateBtn'),
   adminDiscountGateMessage: document.getElementById('adminDiscountGateMessage'),
   adminDiscountPanel: document.getElementById('adminDiscountPanel'),
-  adminDiscountUsersList: document.getElementById('adminDiscountUsersList'),
+  adminDiscountDropdown: document.getElementById('adminDiscountDropdown'),
+  adminDiscountUserResults: document.getElementById('adminDiscountUserResults'),
+  adminDiscountBulkPercent: document.getElementById('adminDiscountBulkPercent'),
+  adminDiscountBulkApplyBtn: document.getElementById('adminDiscountBulkApplyBtn'),
   adminDiscountUsersEmpty: document.getElementById('adminDiscountUsersEmpty'),
   adminDiscountUserSearch: document.getElementById('adminDiscountUserSearch'),
-  adminDiscountUserSelect: document.getElementById('adminDiscountUserSelect'),
+  adminDiscountNewName: document.getElementById('adminDiscountNewName'),
+  adminDiscountNewEmail: document.getElementById('adminDiscountNewEmail'),
+  adminDiscountNewPhone: document.getElementById('adminDiscountNewPhone'),
+  adminDiscountAddNewBtn: document.getElementById('adminDiscountAddNewBtn'),
+  adminDiscountSelectedCount: document.getElementById('adminDiscountSelectedCount'),
   adminCouponForm: document.getElementById('adminCouponForm'),
   adminCouponRecipientEmail: document.getElementById('adminCouponRecipientEmail'),
   adminCouponCode: document.getElementById('adminCouponCode'),
@@ -219,6 +229,7 @@ let pendingForgotEmail = '';
 let profilePreviewObjectUrl = '';
 let availabilityRequestId = 0;
 let adminCustomerRefreshTimer = 0;
+let adminDiscountSearchTimer = 0;
 
 bootstrap();
 
@@ -294,7 +305,10 @@ function attachEvents() {
     state.ivSelections = {};
     state.adminDiscountUnlocked = false;
     state.adminDiscountSearch = '';
-    state.adminDiscountSelectedUserId = '';
+    state.adminDiscountDropdownOpen = false;
+    state.adminDiscountSearchResults = [];
+    state.adminDiscountSearchLoading = false;
+    state.adminDiscountSelectedUsers = [];
     state.selectedServiceCategory = null;
     state.selectedSingleSessionServiceName = '';
     state.singleSessionEditingBookingId = '';
@@ -496,20 +510,6 @@ function attachEvents() {
 
   elements.adminDiscountForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (state.adminDiscountSelectedUserId) {
-      const selectedUser = (Array.isArray(state.adminUsers) ? state.adminUsers : []).find(
-        (user) => String(user.id) === String(state.adminDiscountSelectedUserId)
-      );
-      if (selectedUser) {
-        await applyAdminUserDiscount({
-          userId: selectedUser.id,
-          email: elements.adminDiscountEmail?.value,
-          phone: elements.adminDiscountPhone?.value,
-          discountPercent: elements.adminDiscountPercent?.value,
-        });
-        return;
-      }
-    }
     const fallbackUser = findAdminUserByContact(
       elements.adminDiscountEmail?.value,
       elements.adminDiscountPhone?.value
@@ -529,17 +529,28 @@ function attachEvents() {
     await unlockAdminDiscounts();
   });
   elements.adminDiscountUserSearch?.addEventListener('input', (event) => {
-    state.adminDiscountSearch = String(event.target.value || '').trim().toLowerCase();
-    state.adminDiscountSelectedUserId = '';
-    render();
+    const nextQuery = String(event.target.value || '').trim();
+    state.adminDiscountSearch = nextQuery;
+    scheduleAdminDiscountSearch(nextQuery);
   });
-  elements.adminDiscountUserSelect?.addEventListener('change', (event) => {
-    const selectedId = String(event.target.value || '').trim();
-    state.adminDiscountSelectedUserId = selectedId;
-    const selectedUser = (Array.isArray(state.adminUsers) ? state.adminUsers : []).find(
-      (user) => String(user.id) === selectedId
-    );
-    setAdminDiscountFormFromUser(selectedUser || null);
+  elements.adminDiscountUserSearch?.addEventListener('focus', () => {
+    if (!state.adminDiscountDropdownOpen) {
+      state.adminDiscountDropdownOpen = true;
+      scheduleAdminDiscountSearch(state.adminDiscountSearch);
+      render();
+    }
+  });
+  elements.adminDiscountUserSearch?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      state.adminDiscountDropdownOpen = false;
+      render();
+    }
+  });
+  elements.adminDiscountAddNewBtn?.addEventListener('click', async () => {
+    await createAdminDiscountUser();
+  });
+  elements.adminDiscountBulkApplyBtn?.addEventListener('click', async () => {
+    await applyAdminDiscountToSelected();
   });
   elements.adminCouponForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -582,6 +593,16 @@ function attachEvents() {
     elements.searchInput.value = '';
     elements.statusFilter.value = 'all';
     elements.dateFilter.value = '';
+    render();
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!state.adminDiscountDropdownOpen) return;
+    const target = event.target;
+    if (elements.adminDiscountDropdown?.contains(target) || elements.adminDiscountUserSearch?.contains(target)) {
+      return;
+    }
+    state.adminDiscountDropdownOpen = false;
     render();
   });
 
@@ -3727,29 +3748,6 @@ function renderAdminDiscountPhones() {
   });
 }
 
-function buildAdminDiscountField(labelText, inputEl) {
-  const field = document.createElement('label');
-  field.className = 'admin-discount-field';
-  const label = document.createElement('span');
-  label.textContent = labelText;
-  field.appendChild(label);
-  field.appendChild(inputEl);
-  return field;
-}
-
-function getFilteredAdminUsers() {
-  const users = Array.isArray(state.adminUsers) ? state.adminUsers : [];
-  const query = String(state.adminDiscountSearch || '').trim().toLowerCase();
-  if (!query) return users;
-  return users.filter((user) => {
-    const haystack = [user.name, user.email, user.mobile, user.membershipPlan]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return haystack.includes(query);
-  });
-}
-
 function findAdminUserByContact(email, phone) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const normalizedPhone = String(phone || '').trim();
@@ -3763,42 +3761,105 @@ function findAdminUserByContact(email, phone) {
   });
 }
 
-function setAdminDiscountFormFromUser(user) {
-  if (!elements.adminDiscountEmail || !elements.adminDiscountPhone || !elements.adminDiscountPercent) return;
-  if (!user) {
-    elements.adminDiscountEmail.value = '';
-    elements.adminDiscountPhone.value = '';
-    elements.adminDiscountPercent.value = '';
-    return;
-  }
-  elements.adminDiscountEmail.value = user.email || '';
-  elements.adminDiscountPhone.value = user.mobile || '';
-  const existingDiscount = getAdminDiscountRecordForPhone(user.mobile || '');
-  elements.adminDiscountPercent.value = existingDiscount ? String(existingDiscount.discountPercent || 0) : '';
+function getSelectedDiscountUsers() {
+  return Array.isArray(state.adminDiscountSelectedUsers) ? state.adminDiscountSelectedUsers : [];
 }
 
-function renderAdminDiscountUserSelect(users) {
-  if (!elements.adminDiscountUserSelect) return;
-  const selectedId = String(state.adminDiscountSelectedUserId || '');
-  elements.adminDiscountUserSelect.innerHTML = '<option value="">Choose a user</option>';
+function addSelectedDiscountUser(user) {
+  if (!user || !user.id) return;
+  const selected = getSelectedDiscountUsers();
+  if (selected.some((item) => String(item.id) === String(user.id))) return;
+  state.adminDiscountSelectedUsers = [...selected, user];
+  render();
+}
 
-  users.forEach((user) => {
-    const option = document.createElement('option');
-    option.value = String(user.id);
-    const membershipStatus = String(user.membershipStatus || 'inactive').toLowerCase();
-    const statusLabel = membershipStatus === 'active' ? 'Member' : 'User';
-    const email = user.email || 'no-email';
-    const phone = user.mobile || 'no-phone';
-    option.textContent = `${user.name || 'User'} • ${email} • ${phone} • ${statusLabel}`;
-    if (selectedId && selectedId === String(user.id)) {
-      option.selected = true;
+function removeSelectedDiscountUser(userId) {
+  const normalizedId = String(userId);
+  state.adminDiscountSelectedUsers = getSelectedDiscountUsers().filter(
+    (user) => String(user.id) !== normalizedId
+  );
+  render();
+}
+
+function scheduleAdminDiscountSearch(query) {
+  clearTimeout(adminDiscountSearchTimer);
+  const trimmed = String(query || '').trim();
+  if (!trimmed) {
+    state.adminDiscountSearchLoading = false;
+    state.adminDiscountSearchResults = [];
+    render();
+    return;
+  }
+  state.adminDiscountSearchLoading = true;
+  render();
+  adminDiscountSearchTimer = window.setTimeout(() => {
+    fetchAdminDiscountUsers(trimmed);
+  }, 300);
+}
+
+async function createAdminDiscountUser() {
+  const name = String(elements.adminDiscountNewName?.value || '').trim();
+  const email = String(elements.adminDiscountNewEmail?.value || '').trim().toLowerCase();
+  const phone = String(elements.adminDiscountNewPhone?.value || '').trim();
+
+  if (!name || !email || !phone) {
+    alert('Name, email, and phone are required to add a new user.');
+    return;
+  }
+  if (!isLikelyEmail(email)) {
+    alert('Enter a valid email address.');
+    return;
+  }
+
+  try {
+    const result = await api('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, mobile: phone }),
+    });
+    if (!result?.user?.id) {
+      throw new Error('Unable to add the user.');
     }
-    elements.adminDiscountUserSelect.appendChild(option);
-  });
+
+    const nextSelected = getSelectedDiscountUsers();
+    const exists = nextSelected.some((user) => String(user.id) === String(result.user.id));
+    state.adminDiscountSelectedUsers = exists ? nextSelected : [...nextSelected, result.user];
+
+    if (Array.isArray(state.adminUsers)) {
+      const known = state.adminUsers.some((user) => String(user.id) === String(result.user.id));
+      if (!known) state.adminUsers = [...state.adminUsers, result.user];
+    }
+
+    if (elements.adminDiscountNewName) elements.adminDiscountNewName.value = '';
+    if (elements.adminDiscountNewEmail) elements.adminDiscountNewEmail.value = '';
+    if (elements.adminDiscountNewPhone) elements.adminDiscountNewPhone.value = '';
+    scheduleAdminDiscountSearch(state.adminDiscountSearch);
+  } catch (error) {
+    alert(error.message || 'Unable to add the user right now.');
+  }
+}
+
+async function fetchAdminDiscountUsers(query) {
+  const trimmed = String(query || '').trim();
+  try {
+    const result = await api(`/api/admin/users?search=${encodeURIComponent(trimmed)}`);
+    state.adminDiscountSearchResults = result.users || [];
+  } catch {
+    state.adminDiscountSearchResults = [];
+  } finally {
+    state.adminDiscountSearchLoading = false;
+    render();
+  }
 }
 
 function renderAdminDiscountUsers() {
-  if (!elements.adminDiscountPanel || !elements.adminDiscountUsersList || !elements.adminDiscountUsersEmpty) return;
+  if (
+    !elements.adminDiscountPanel ||
+    !elements.adminDiscountUserResults ||
+    !elements.adminDiscountUsersEmpty
+  ) {
+    return;
+  }
 
   if (elements.adminDiscountGateMessage) {
     if (state.adminDiscountUnlocked && !elements.adminDiscountGateMessage.textContent) {
@@ -3809,165 +3870,153 @@ function renderAdminDiscountUsers() {
 
   elements.adminDiscountPanel.hidden = !state.adminDiscountUnlocked;
   if (!state.adminDiscountUnlocked) {
-    elements.adminDiscountUsersList.innerHTML = '';
+    elements.adminDiscountUserResults.innerHTML = '';
     elements.adminDiscountUsersEmpty.hidden = true;
     return;
   }
 
-  const users = getFilteredAdminUsers();
-  elements.adminDiscountUsersList.innerHTML = '';
-  renderAdminDiscountUserSelect(users);
-  if (!users.length) {
+  if (elements.adminDiscountDropdown) {
+    elements.adminDiscountDropdown.hidden = !state.adminDiscountDropdownOpen;
+    elements.adminDiscountDropdown.classList.toggle('is-open', state.adminDiscountDropdownOpen);
+  }
+
+  if (elements.adminDiscountSelectedCount) {
+    const count = getSelectedDiscountUsers().length;
+    elements.adminDiscountSelectedCount.textContent = `${count} selected`;
+  }
+
+  const users = Array.isArray(state.adminDiscountSearchResults) ? state.adminDiscountSearchResults : [];
+  elements.adminDiscountUserResults.innerHTML = '';
+  if (!state.adminDiscountDropdownOpen) {
+    elements.adminDiscountUsersEmpty.hidden = true;
+    return;
+  }
+
+  if (state.adminDiscountSearchLoading) {
+    const emptyTextEl = elements.adminDiscountUsersEmpty.querySelector('p');
+    if (emptyTextEl) emptyTextEl.textContent = 'Searching...';
     elements.adminDiscountUsersEmpty.hidden = false;
     return;
   }
-  elements.adminDiscountUsersEmpty.hidden = true;
 
-  users.forEach((user) => {
-    const card = document.createElement('article');
-    card.className = 'admin-discount-user-card';
+  const trimmedQuery = String(state.adminDiscountSearch || '').trim();
+  if (!users.length) {
+    const emptyText = trimmedQuery
+      ? 'No users found. Add a new user below.'
+      : 'Type to search users.';
+    const emptyTextEl = elements.adminDiscountUsersEmpty.querySelector('p');
+    if (emptyTextEl) emptyTextEl.textContent = emptyText;
+    elements.adminDiscountUsersEmpty.hidden = false;
+  } else {
+    elements.adminDiscountUsersEmpty.hidden = true;
+    users.forEach((user) => {
+      const row = document.createElement('div');
+      row.className = 'admin-discount-result-row';
 
-    const membershipStatus = String(user.membershipStatus || 'inactive').toLowerCase();
-    const isMember = membershipStatus === 'active';
-    const peopleCount = Number(user.membershipPeopleCount || 0);
-    const peopleLine = peopleCount > 0 ? ` • ${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}` : '';
-    const membershipLine = isMember
-      ? `Active member${user.membershipPlan ? ` • ${user.membershipPlan}` : ''}${peopleLine}`
-      : 'No active membership';
-    const expiresLine = user.membershipExpiresAt ? `Expires: ${formatDateOnly(user.membershipExpiresAt)}` : '';
+      const main = document.createElement('div');
+      main.className = 'admin-discount-result-main';
 
-    const header = document.createElement('div');
-    header.className = 'admin-discount-user-head';
-    header.innerHTML = `
-      <div>
-        <h3>${escapeHtml(user.name || 'User')}</h3>
-        <p>${escapeHtml(membershipLine)}${expiresLine ? ` • ${escapeHtml(expiresLine)}` : ''}</p>
-      </div>
-      <span class="status-chip ${isMember ? 'status-paid' : 'status-pending'}">${isMember ? 'Member' : 'User'}</span>
-    `;
-    card.appendChild(header);
-
-    const grid = document.createElement('div');
-    grid.className = 'admin-discount-user-grid';
-    const emailInput = document.createElement('input');
-    emailInput.type = 'email';
-    emailInput.value = user.email || '';
-    emailInput.placeholder = 'Add email';
-    const phoneInput = document.createElement('input');
-    phoneInput.type = 'tel';
-    phoneInput.value = user.mobile || '';
-    phoneInput.placeholder = 'Add phone number';
-    const discountInput = document.createElement('input');
-    discountInput.type = 'number';
-    discountInput.min = '1';
-    discountInput.max = '100';
-    discountInput.step = '1';
-    discountInput.placeholder = '10';
-
-    const existingDiscount = getAdminDiscountRecordForPhone(user.mobile || '');
-    if (existingDiscount) {
-      discountInput.value = String(existingDiscount.discountPercent || 0);
-    }
-
-    grid.append(
-      buildAdminDiscountField('Email', emailInput),
-      buildAdminDiscountField('Phone', phoneInput),
-      buildAdminDiscountField('Discount %', discountInput)
-    );
-    card.appendChild(grid);
-
-    const actions = document.createElement('div');
-    actions.className = 'admin-discount-user-actions';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.className = 'btn btn-secondary';
-    saveBtn.textContent = 'Save Details';
-    saveBtn.addEventListener('click', async () => {
-      await updateAdminUserContact(user.id, emailInput.value, phoneInput.value);
-    });
-    actions.appendChild(saveBtn);
-
-    const applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'btn btn-primary';
-    applyBtn.textContent = 'Apply Discount';
-    applyBtn.addEventListener('click', async () => {
-      await applyAdminUserDiscount({
-        userId: user.id,
-        email: emailInput.value,
-        phone: phoneInput.value,
-        discountPercent: discountInput.value,
+      const left = document.createElement('div');
+      left.className = 'admin-discount-result-left';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = getSelectedDiscountUsers().some((item) => String(item.id) === String(user.id));
+      checkbox.addEventListener('change', (event) => {
+        if (event.target.checked) {
+          addSelectedDiscountUser(user);
+        } else {
+          removeSelectedDiscountUser(user.id);
+        }
       });
+      const info = document.createElement('div');
+      info.className = 'admin-discount-result-info';
+      const membershipStatus = String(user.membershipStatus || 'inactive').toLowerCase();
+      const isMember = membershipStatus === 'active';
+      const statusLabel = isMember ? 'Member' : 'User';
+      const email = user.email || 'no-email';
+      const phone = user.mobile || 'no-phone';
+      info.innerHTML = `
+        <strong>${escapeHtml(user.name || 'User')}</strong>
+        <span>${escapeHtml(email)} • ${escapeHtml(phone)}</span>
+        <span>${escapeHtml(statusLabel)}</span>
+      `;
+      left.append(checkbox, info);
+
+      const statusChip = document.createElement('span');
+      statusChip.className = `status-chip ${isMember ? 'status-paid' : 'status-pending'}`;
+      statusChip.textContent = statusLabel;
+
+      main.append(left, statusChip);
+      row.appendChild(main);
+
+      elements.adminDiscountUserResults.appendChild(row);
     });
-    actions.appendChild(applyBtn);
-
-    if (existingDiscount) {
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'btn btn-secondary';
-      removeBtn.textContent = 'Remove Discount';
-      removeBtn.addEventListener('click', async () => {
-        await deleteAdminDiscountPhone(existingDiscount.id);
-      });
-      actions.appendChild(removeBtn);
-    }
-
-    card.appendChild(actions);
-    elements.adminDiscountUsersList.appendChild(card);
-  });
-}
-
-async function updateAdminUserContact(userId, email, phone) {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const normalizedPhone = String(phone || '').trim();
-  if (!normalizedEmail) {
-    alert('Email is required.');
-    return;
-  }
-
-  try {
-    await api(`/api/admin/users/${encodeURIComponent(userId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: normalizedEmail, mobile: normalizedPhone }),
-    });
-    await loadDashboardData();
-    render();
-  } catch (error) {
-    alert(error.message || 'Unable to save user details.');
   }
 }
 
-async function applyAdminUserDiscount({ userId, email, phone, discountPercent }) {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const normalizedPhone = String(phone || '').trim();
-  const percent = Number(discountPercent || 0);
-
-  if (!normalizedEmail) {
-    alert('Email is required.');
+async function applyAdminDiscountToSelected() {
+  const selectedUsers = getSelectedDiscountUsers();
+  if (!selectedUsers.length) {
+    alert('Select at least one user to apply a discount.');
     return;
   }
-  if (!normalizedPhone) {
-    alert('Add a phone number to apply a discount.');
-    return;
-  }
+  const percent = Number(elements.adminDiscountBulkPercent?.value || 0);
   if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
     alert('Enter a valid discount percentage between 1 and 100.');
     return;
   }
 
-  try {
+  const failures = [];
+  for (const user of selectedUsers) {
+    const email = String(user.email || '').trim().toLowerCase();
+    const phone = String(user.mobile || '').trim();
+    if (!phone) {
+      failures.push(user.name || `User ${user.id}`);
+      continue;
+    }
+    try {
+      await applyAdminUserDiscountRaw({ userId: user.id, email, phone, discountPercent: percent });
+    } catch {
+      failures.push(user.name || `User ${user.id}`);
+    }
+  }
+
+  await loadDashboardData();
+  await fetchAdminDiscountUsers(state.adminDiscountSearch);
+  if (failures.length) {
+    alert(`Discount applied with some issues. Could not apply for: ${failures.join(', ')}.`);
+  }
+}
+
+async function applyAdminUserDiscountRaw({ userId, email, phone, discountPercent }) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedPhone = String(phone || '').trim();
+  const percent = Number(discountPercent || 0);
+
+  if (!normalizedPhone) {
+    throw new Error('Add a phone number to apply a discount.');
+  }
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    throw new Error('Enter a valid discount percentage between 1 and 100.');
+  }
+
+  if (normalizedEmail) {
     await api(`/api/admin/users/${encodeURIComponent(userId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: normalizedEmail, mobile: normalizedPhone }),
     });
-    await api('/api/admin/discount-phones', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: normalizedPhone, discountPercent: percent }),
-    });
+  }
+  await api('/api/admin/discount-phones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: normalizedPhone, discountPercent: percent }),
+  });
+}
+
+async function applyAdminUserDiscount({ userId, email, phone, discountPercent }) {
+  try {
+    await applyAdminUserDiscountRaw({ userId, email, phone, discountPercent });
     await loadDashboardData();
     render();
   } catch (error) {
