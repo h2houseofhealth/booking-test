@@ -271,6 +271,7 @@
                 <th>Patient</th>
                 <th>Service</th>
                 <th>Date & Time</th>
+                <th>Booked At</th>
                 <th>Status</th>
                 <th>Payment</th>
                 <th>Actions</th>
@@ -307,7 +308,7 @@
             <h3>Member &amp; User Discounts</h3>
           </div>
           <p class="membership-copy">
-            Search users, select the ones you want, or add a new user, then apply a service discount by phone.
+            Search users, select the ones you want, then apply a service discount by phone.
           </p>
           <div class="admin-discount-finder">
             <div class="admin-discount-dropdown">
@@ -321,26 +322,20 @@
                   <div id="adminDiscountUsersEmpty" class="admin-discount-no-results" hidden>
                     <p>No users found.</p>
                   </div>
-                  <div class="admin-discount-create-inline">
-                    <h4>Add New User</h4>
-                    <label>
-                      Name
-                      <input id="adminDiscountNewName" type="text" placeholder="Name" />
-                    </label>
-                    <label>
-                      Email
-                      <input id="adminDiscountNewEmail" type="email" placeholder="Email" />
-                    </label>
-                    <label>
-                      Phone
-                      <input id="adminDiscountNewPhone" type="tel" placeholder="Phone" />
-                    </label>
-                    <button id="adminDiscountAddNewBtn" class="btn btn-primary" type="button">Add + Select</button>
-                  </div>
                 </div>
               </div>
               <div class="admin-discount-apply">
-                <span id="adminDiscountSelectedCount" class="admin-discount-selected-count">0 selected</span>
+                <div class="admin-discount-selected-summary">
+                  <span id="adminDiscountSelectedCount" class="admin-discount-selected-count">0 selected</span>
+                  <button id="adminDiscountSelectedBtn" class="btn btn-secondary" type="button">Selected</button>
+                  <div id="adminDiscountSelectedWindow" class="admin-discount-selected-window" hidden>
+                    <div class="admin-discount-selected-head">
+                      <h4>Selected Users</h4>
+                      <span id="adminDiscountSelectedWindowCount" class="admin-discount-selected-count">0 selected</span>
+                    </div>
+                    <div id="adminDiscountSelectedList" class="admin-discount-selected-list"></div>
+                  </div>
+                </div>
                 <label>
                   Discount %
                   <input id="adminDiscountBulkPercent" type="number" min="1" max="100" step="1" placeholder="10" />

@@ -17,6 +17,7 @@ loadEnvFromFile(path.join(__dirname, '.env'));
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_super_secret_change_me';
 const IS_PRODUCTION = normalizeEnvValue(process.env.NODE_ENV).toLowerCase() === 'production';
+const ALLOW_DEV_OTP_FALLBACK = !IS_PRODUCTION && normalizeEnvValue(process.env.ALLOW_DEV_OTP_FALLBACK || 'true').toLowerCase() !== 'false';
 const TOKEN_COOKIE = 'booking_portal_token';
 const ALLOWED_SLOT_START_TIMES = ['09:30', '10:30', '11:30', '12:30', '13:30', '14:30', '15:30', '16:30', '17:30', '18:30', '19:30'];
 const MAX_BOOKINGS_PER_SLOT_HYDROGEN = 1;
@@ -363,6 +364,22 @@ function normalizeEnvValue(value) {
   return normalized;
 }
 
+function extractSendGridErrorDetails(error) {
+  const statusCode = Number(error?.code || error?.response?.statusCode || 500);
+  const body = error?.response?.body;
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  const detail = errors
+    .map((entry) => String(entry?.message || entry?.field || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+
+  return {
+    statusCode,
+    detail,
+    responseBody: body || null,
+  };
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -455,7 +472,7 @@ app.post('/api/auth/register/start', async (req, res) => {
   }
 
   return res.status(200).json({
-    message: `Signup OTP sent to ${email}. It expires in ${OTP_TTL_MINUTES} minutes.`,
+    message: mailResult.message || `Signup OTP sent to ${email}. It expires in ${OTP_TTL_MINUTES} minutes.`,
     otpRequired: true,
     verificationRequired: true,
   });
@@ -618,7 +635,14 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(404).json({ message: 'User not found. Please register.' });
   }
 
-  if (!bcrypt.compareSync(String(password), user.password_hash)) {
+  const passwordHash = String(user.password_hash || '').trim();
+  if (!passwordHash) {
+    return res.status(500).json({
+      message: 'This account is missing a password. Please contact support or reseed the admin account.',
+    });
+  }
+
+  if (!bcrypt.compareSync(String(password), passwordHash)) {
     return res.status(401).json({ message: 'Invalid password.' });
   }
 
@@ -681,7 +705,7 @@ app.post('/api/auth/password/forgot', async (req, res) => {
   }
 
   return res.json({
-    message: `Password reset OTP sent to ${email}. It expires in ${OTP_TTL_MINUTES} minutes.`,
+    message: mailResult.message || `Password reset OTP sent to ${email}. It expires in ${OTP_TTL_MINUTES} minutes.`,
   });
 });
 
@@ -2120,6 +2144,9 @@ app.post('/api/hydrogen/create-order', requireAuth, async (req, res) => {
     if (!ALLOWED_SLOT_START_TIMES.includes(bookingTime)) {
       return res.status(400).json({ message: `Invalid bookingTime: ${bookingTime}` });
     }
+    if (isBookingSlotInPast(bookingDate, bookingTime)) {
+      return res.status(400).json({ message: `bookingTime cannot be in the past for ${bookingDate}` });
+    }
     normalizedSlots.push({ bookingDate, bookingTime });
   }
 
@@ -2181,7 +2208,7 @@ app.post('/api/hydrogen/create-order', requireAuth, async (req, res) => {
       `INSERT INTO bookings (
         user_id, doctor_id, client_name, client_email, client_phone,
         service_name, booking_date, booking_time, assigned_staff, status, payment_status, payment_order_id, booking_group_id, notes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'payment_pending', ?, ?, ?, datetime('now'))`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'payment_pending', ?, ?, ?, ?)`
     );
     const countActiveForSlot = db.prepare(
       `SELECT
@@ -2222,7 +2249,8 @@ app.post('/api/hydrogen/create-order', requireAuth, async (req, res) => {
           'H2 House Of Health',
           order.id,
           bookingGroupId,
-          `Hydrogen package ${packageSessions} + extra ${extraSessions}`
+          `Hydrogen package ${packageSessions} + extra ${extraSessions}`,
+          getCurrentSqliteTimestamp()
         );
       }
 
@@ -2261,7 +2289,8 @@ app.post('/api/hydrogen/create-order', requireAuth, async (req, res) => {
           'H2 House Of Health',
           order.id,
           bookingGroupId,
-          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1})`
+          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1})`,
+          getCurrentSqliteTimestamp()
         );
 
         addOnSummary = {
@@ -2339,6 +2368,9 @@ app.post('/api/hydrogen/book-pack', requireAuth, (req, res) => {
     if (!ALLOWED_SLOT_START_TIMES.includes(bookingTime)) {
       return res.status(400).json({ message: `Invalid bookingTime: ${bookingTime}` });
     }
+    if (isBookingSlotInPast(bookingDate, bookingTime)) {
+      return res.status(400).json({ message: `bookingTime cannot be in the past for ${bookingDate}` });
+    }
     normalizedSlots.push({ bookingDate, bookingTime });
   }
 
@@ -2389,7 +2421,7 @@ app.post('/api/hydrogen/book-pack', requireAuth, (req, res) => {
       `INSERT INTO bookings (
         user_id, doctor_id, client_name, client_email, client_phone,
         service_name, booking_date, booking_time, assigned_staff, status, payment_status, booking_group_id, notes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, datetime('now'))`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, ?)`
     );
     const countActiveForSlot = db.prepare(
       `SELECT
@@ -2429,7 +2461,8 @@ app.post('/api/hydrogen/book-pack', requireAuth, (req, res) => {
           entry.bookingTime,
           'H2 House Of Health',
           bookingGroupId,
-          `Hydrogen package ${packageSessions} + extra ${extraSessions}`
+          `Hydrogen package ${packageSessions} + extra ${extraSessions}`,
+          getCurrentSqliteTimestamp()
         );
         createdIds.push(Number(result.lastInsertRowid));
       }
@@ -2468,7 +2501,8 @@ app.post('/api/hydrogen/book-pack', requireAuth, (req, res) => {
           addOnSlot.bookingTime,
           'H2 House Of Health',
           bookingGroupId,
-          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1})`
+          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1})`,
+          getCurrentSqliteTimestamp()
         );
         createdIds.push(Number(addOnResult.lastInsertRowid));
         addOnSummary = {
@@ -2556,6 +2590,9 @@ app.post('/api/admin/hydrogen/book-pack', requireAuth, requireAdmin, (req, res) 
     if (!ALLOWED_SLOT_START_TIMES.includes(bookingTime)) {
       return res.status(400).json({ message: `Invalid bookingTime: ${bookingTime}` });
     }
+    if (isBookingSlotInPast(bookingDate, bookingTime)) {
+      return res.status(400).json({ message: `bookingTime cannot be in the past for ${bookingDate}` });
+    }
     normalizedSlots.push({ bookingDate, bookingTime });
   }
 
@@ -2597,7 +2634,7 @@ app.post('/api/admin/hydrogen/book-pack', requireAuth, requireAdmin, (req, res) 
       `INSERT INTO bookings (
         user_id, doctor_id, client_name, client_email, client_phone,
         service_name, booking_date, booking_time, assigned_staff, status, payment_status, booking_group_id, notes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, datetime('now'))`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, ?)`
     );
     const countActiveForSlot = db.prepare(
       `SELECT
@@ -2637,7 +2674,8 @@ app.post('/api/admin/hydrogen/book-pack', requireAuth, requireAdmin, (req, res) 
           entry.bookingTime,
           'H2 House Of Health',
           bookingGroupId,
-          `Hydrogen package ${packageSessions} + extra ${extraSessions} (booked by admin)`
+          `Hydrogen package ${packageSessions} + extra ${extraSessions} (booked by admin)`,
+          getCurrentSqliteTimestamp()
         );
         createdIds.push(Number(result.lastInsertRowid));
       }
@@ -2676,7 +2714,8 @@ app.post('/api/admin/hydrogen/book-pack', requireAuth, requireAdmin, (req, res) 
           addOnSlot.bookingTime,
           'H2 House Of Health',
           bookingGroupId,
-          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1}) (booked by admin)`
+          `IV add-on for ${service.name} (Session ${addOnSessionIndex + 1}) (booked by admin)`,
+          getCurrentSqliteTimestamp()
         );
         createdIds.push(Number(addOnResult.lastInsertRowid));
         addOnSummary = {
@@ -2819,6 +2858,9 @@ app.put('/api/hydrogen/packages/:groupId', requireAuth, (req, res) => {
     }
     if (!ALLOWED_SLOT_START_TIMES.includes(bookingTime)) {
       return res.status(400).json({ message: `Invalid bookingTime: ${bookingTime}` });
+    }
+    if (isBookingSlotInPast(bookingDate, bookingTime)) {
+      return res.status(400).json({ message: `bookingTime cannot be in the past for ${bookingDate}` });
     }
     normalizedSlots.push({ bookingDate, bookingTime });
   }
@@ -2978,7 +3020,7 @@ app.put('/api/hydrogen/packages/:groupId', requireAuth, (req, res) => {
         `INSERT INTO bookings (
           user_id, doctor_id, client_name, client_email, client_phone,
           service_name, booking_date, booking_time, assigned_staff, status, payment_status, booking_group_id, notes, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, datetime('now'))`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?, ?)`
       );
 
       sortedHydrogenBookings.forEach((entry, index) => {
@@ -3015,7 +3057,8 @@ app.put('/api/hydrogen/packages/:groupId', requireAuth, (req, res) => {
             addOnSlot.bookingTime,
             'H2 House Of Health',
             bookingGroupId,
-            addOnNote
+            addOnNote,
+            getCurrentSqliteTimestamp()
           );
         }
       } else if (existingAddOnBooking) {
@@ -4123,6 +4166,11 @@ app.get(/.*/, (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
+  if (SENDGRID_API_KEY && SENDGRID_FROM_EMAIL) {
+    console.log(`SendGrid OTP mailer configured with sender ${SENDGRID_FROM_EMAIL}`);
+  } else {
+    console.warn('SendGrid OTP mailer is not fully configured. Check SENDGRID_API_KEY and SENDGRID_FROM_EMAIL.');
+  }
 });
 
 function canAccessBooking(user, ownerId) {
@@ -4540,6 +4588,10 @@ function buildRazorpayReceipt(prefix, identifier = '') {
   return [safePrefix, safeIdentifier, stamp].filter(Boolean).join('_').slice(0, 40);
 }
 
+function getCurrentSqliteTimestamp() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function getRazorpayOrderErrorMessage(error, fallbackMessage) {
   const message =
     error?.error?.description ||
@@ -4679,7 +4731,7 @@ function createSingleBookingResponse(req, res, { targetUser, defaultNotes = '', 
       `INSERT INTO bookings (
         user_id, doctor_id, client_name, client_email, client_phone,
         service_name, booking_date, booking_time, assigned_staff, status, payment_status, notes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'))`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
     )
     .run(
       targetUser.id,
@@ -4692,7 +4744,8 @@ function createSingleBookingResponse(req, res, { targetUser, defaultNotes = '', 
       payload.data.bookingTime,
       'H2 House Of Health',
       selectedService?.membershipOnly ? 'paid' : 'unpaid',
-      payload.data.notes || defaultNotes
+      payload.data.notes || defaultNotes,
+      getCurrentSqliteTimestamp()
     );
 
   const booking = db
@@ -5263,6 +5316,10 @@ function validateBookingPayload(body, user) {
     return { error: 'bookingTime must be one of the allowed 1.5-hour slots' };
   }
 
+  if (isBookingSlotInPast(bookingDate, bookingTime)) {
+    return { error: 'bookingTime cannot be in the past for the selected date' };
+  }
+
   return {
     data: {
       serviceName,
@@ -5271,6 +5328,15 @@ function validateBookingPayload(body, user) {
       notes,
     },
   };
+}
+
+function isBookingSlotInPast(bookingDate, bookingTime) {
+  const normalizedDate = String(bookingDate || '').trim();
+  const normalizedTime = String(bookingTime || '').trim();
+  if (!normalizedDate || !normalizedTime) return false;
+  const slotDateTime = new Date(`${normalizedDate}T${normalizedTime}:00`);
+  if (Number.isNaN(slotDateTime.getTime())) return false;
+  return slotDateTime.getTime() < Date.now();
 }
 
 function normalizeMembershipMembers(rawMembers, expectedCount) {
@@ -5804,11 +5870,19 @@ async function sendCouponEmail({ toEmail, recipientName, code, discountValue, ap
       });
       return { ok: true };
     } catch (error) {
-      console.error('Failed to send coupon email via SendGrid:', error);
+      const sendGridError = extractSendGridErrorDetails(error);
+      console.error('Failed to send coupon email via SendGrid:', {
+        statusCode: sendGridError.statusCode,
+        detail: sendGridError.detail,
+        responseBody: sendGridError.responseBody,
+      });
       return {
         ok: false,
-        statusCode: 500,
-        message: 'Unable to send coupon email. Please try again.',
+        statusCode: sendGridError.statusCode || 500,
+        message:
+          sendGridError.statusCode === 403
+            ? 'SendGrid rejected the sender identity. Verify the configured FROM email or authenticated domain.'
+            : 'Unable to send coupon email. Please try again.',
       };
     }
   }
@@ -5844,8 +5918,22 @@ async function sendCouponEmail({ toEmail, recipientName, code, discountValue, ap
 
 async function sendOtpEmail(toEmail, otp, purpose = 'signup') {
   const normalizedToEmail = String(toEmail || '').trim().toLowerCase();
+  const otpValue = String(otp || '').trim();
+  const isPasswordReset = String(purpose || '').trim().toLowerCase() === 'password_reset';
+  const flowLabel = isPasswordReset ? 'password reset' : 'signup';
 
   if (!SENDGRID_API_KEY || !SENDGRID_FROM_EMAIL) {
+    if (ALLOW_DEV_OTP_FALLBACK) {
+      console.warn(
+        `[DEV OTP FALLBACK] ${flowLabel} OTP for ${normalizedToEmail}: ${otpValue}. SendGrid is not configured, so the OTP was logged locally.`
+      );
+      return {
+        ok: true,
+        delivery: 'console',
+        message: `OTP generated for ${normalizedToEmail}. Check the server console because SendGrid is not configured in development.`,
+      };
+    }
+
     return {
       ok: false,
       statusCode: 500,
@@ -5853,20 +5941,19 @@ async function sendOtpEmail(toEmail, otp, purpose = 'signup') {
     };
   }
 
-  const isPasswordReset = String(purpose || '').trim().toLowerCase() === 'password_reset';
   const subject = isPasswordReset ? 'Password Reset Verification' : 'Sign Up Verification';
   const heading = isPasswordReset ? 'Password Reset Verification' : 'Sign Up Verification';
   const intro = isPasswordReset
     ? 'Use the OTP below to continue resetting your password.'
     : 'Use the OTP below to complete your sign up.';
-  const text = `${heading}\n\n${intro}\n\nOTP: ${String(otp)}\nValid for: ${OTP_TTL_MINUTES} minutes\n\nIf you did not request this, please ignore this email.`;
+  const text = `${heading}\n\n${intro}\n\nOTP: ${otpValue}\nValid for: ${OTP_TTL_MINUTES} minutes\n\nIf you did not request this, please ignore this email.`;
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937;">
       <h2 style="margin: 0 0 16px;">${heading}</h2>
       <p style="margin: 0 0 12px;">${intro}</p>
       <p style="margin: 0 0 8px;">Your OTP is:</p>
       <div style="display: inline-block; padding: 12px 18px; border-radius: 8px; background: #f3f4f6; font-size: 24px; font-weight: 700; letter-spacing: 4px;">
-        ${String(otp)}
+        ${otpValue}
       </div>
       <p style="margin: 16px 0 0;">This OTP is valid for ${OTP_TTL_MINUTES} minutes.</p>
       <p style="margin: 12px 0 0; color: #6b7280;">If you did not request this, please ignore this email.</p>
@@ -5881,17 +5968,30 @@ async function sendOtpEmail(toEmail, otp, purpose = 'signup') {
       text,
       html,
     });
-    return { ok: true };
+    return {
+      ok: true,
+      delivery: 'sendgrid',
+      message: `${isPasswordReset ? 'Password reset' : 'Signup'} OTP sent to ${normalizedToEmail}. It expires in ${OTP_TTL_MINUTES} minutes.`,
+    };
   } catch (error) {
-    console.error('Failed to send OTP email:', error);
-    const statusCode = Number(error?.code || error?.response?.statusCode || 500);
+    const sendGridError = extractSendGridErrorDetails(error);
+    console.error('Failed to send OTP email via SendGrid:', {
+      to: normalizedToEmail,
+      from: SENDGRID_FROM_EMAIL,
+      statusCode: sendGridError.statusCode,
+      detail: sendGridError.detail,
+      responseBody: sendGridError.responseBody,
+    });
+    const statusCode = sendGridError.statusCode;
     const isUnauthorized = statusCode === 401 || statusCode === 403;
 
     return {
       ok: false,
       statusCode,
       message: isUnauthorized
-        ? 'SendGrid authentication failed. Please contact support.'
+        ? statusCode === 403
+          ? 'SendGrid rejected the sender identity. Verify the configured FROM email or authenticated domain.'
+          : 'SendGrid authentication failed. Please contact support.'
         : 'Unable to send OTP email. Please try again.',
     };
   }
@@ -6279,18 +6379,23 @@ function seedDoctors() {
 
 function seedAdmin() {
   const email = 'admin@h2health.local';
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  const defaultPasswordHash = bcrypt.hashSync('Admin@12345', 10);
+  const existing = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(email);
 
   if (!existing) {
-    const passwordHash = bcrypt.hashSync('Admin@12345', 10);
     db.prepare(
       `INSERT INTO users (name, email, password_hash, role, created_at)
        VALUES (?, ?, ?, 'admin', datetime('now'))`
-    ).run('Portal Admin', email, passwordHash);
+    ).run('Portal Admin', email, defaultPasswordHash);
     return;
   }
 
   db.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
+
+  const existingPasswordHash = String(existing.password_hash || '').trim();
+  if (!existingPasswordHash) {
+    db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(defaultPasswordHash, email);
+  }
 }
 
 function rateLimit({ windowMs, max }) {

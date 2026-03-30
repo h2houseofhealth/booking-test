@@ -49,6 +49,7 @@ const state = {
   adminDiscountSearchResults: [],
   adminDiscountSearchLoading: false,
   adminDiscountSelectedUsers: [],
+  adminDiscountSelectedWindowOpen: false,
   filters: {
     search: '',
     status: 'all',
@@ -183,11 +184,11 @@ const elements = {
   adminDiscountBulkApplyBtn: document.getElementById('adminDiscountBulkApplyBtn'),
   adminDiscountUsersEmpty: document.getElementById('adminDiscountUsersEmpty'),
   adminDiscountUserSearch: document.getElementById('adminDiscountUserSearch'),
-  adminDiscountNewName: document.getElementById('adminDiscountNewName'),
-  adminDiscountNewEmail: document.getElementById('adminDiscountNewEmail'),
-  adminDiscountNewPhone: document.getElementById('adminDiscountNewPhone'),
-  adminDiscountAddNewBtn: document.getElementById('adminDiscountAddNewBtn'),
   adminDiscountSelectedCount: document.getElementById('adminDiscountSelectedCount'),
+  adminDiscountSelectedBtn: document.getElementById('adminDiscountSelectedBtn'),
+  adminDiscountSelectedWindow: document.getElementById('adminDiscountSelectedWindow'),
+  adminDiscountSelectedWindowCount: document.getElementById('adminDiscountSelectedWindowCount'),
+  adminDiscountSelectedList: document.getElementById('adminDiscountSelectedList'),
   adminCouponForm: document.getElementById('adminCouponForm'),
   adminCouponRecipientEmail: document.getElementById('adminCouponRecipientEmail'),
   adminCouponCode: document.getElementById('adminCouponCode'),
@@ -309,6 +310,7 @@ function attachEvents() {
     state.adminDiscountSearchResults = [];
     state.adminDiscountSearchLoading = false;
     state.adminDiscountSelectedUsers = [];
+    state.adminDiscountSelectedWindowOpen = false;
     state.selectedServiceCategory = null;
     state.selectedSingleSessionServiceName = '';
     state.singleSessionEditingBookingId = '';
@@ -546,11 +548,12 @@ function attachEvents() {
       render();
     }
   });
-  elements.adminDiscountAddNewBtn?.addEventListener('click', async () => {
-    await createAdminDiscountUser();
-  });
   elements.adminDiscountBulkApplyBtn?.addEventListener('click', async () => {
     await applyAdminDiscountToSelected();
+  });
+  elements.adminDiscountSelectedBtn?.addEventListener('click', () => {
+    state.adminDiscountSelectedWindowOpen = !state.adminDiscountSelectedWindowOpen;
+    render();
   });
   elements.adminCouponForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -597,12 +600,21 @@ function attachEvents() {
   });
 
   document.addEventListener('click', (event) => {
-    if (!state.adminDiscountDropdownOpen) return;
     const target = event.target;
-    if (elements.adminDiscountDropdown?.contains(target) || elements.adminDiscountUserSearch?.contains(target)) {
+
+    if (state.adminDiscountDropdownOpen) {
+      if (elements.adminDiscountDropdown?.contains(target) || elements.adminDiscountUserSearch?.contains(target)) {
+        return;
+      }
+      state.adminDiscountDropdownOpen = false;
+      render();
+    }
+
+    if (!state.adminDiscountSelectedWindowOpen) return;
+    if (elements.adminDiscountSelectedWindow?.contains(target) || elements.adminDiscountSelectedBtn?.contains(target)) {
       return;
     }
-    state.adminDiscountDropdownOpen = false;
+    state.adminDiscountSelectedWindowOpen = false;
     render();
   });
 
@@ -1018,9 +1030,9 @@ function getHydrogenSlotsForSubmit(requiredSlots) {
   return slots;
 }
 
-function populateAvailableTimeOptions(selectElement, serviceName, bookingDate, currentReservedSlot = null) {
+function populateAvailableTimeOptions(selectElement, serviceName, bookingDate, currentReservedSlot = null, preferredTime = '') {
   if (!selectElement) return;
-  const selectedValue = String(selectElement.value || '');
+  const selectedValue = String(selectElement.value || preferredTime || currentReservedSlot?.bookingTime || '').trim();
   selectElement.innerHTML = '';
 
   const serviceAvailability = state.slotAvailability[String(serviceName || '')] || {};
@@ -1034,15 +1046,18 @@ function populateAvailableTimeOptions(selectElement, serviceName, bookingDate, c
     const booked = Number(serviceAvailability[optionData.value] || 0);
     const held = Number(serviceHolds[optionData.value] || 0);
     const isCurrentReserved = bookingDate === reservedDate && optionData.value === reservedTime;
+    const isPastSlot = isBookingSlotInPast(bookingDate, optionData.value);
     const isFull = booked >= capacity && !isCurrentReserved;
     const option = document.createElement('option');
     option.value = optionData.value;
-    option.textContent = isFull
-      ? held > 0
-        ? `${optionData.label} (On hold - try in ${holdMinutes} min)`
-        : `${optionData.label} (Full)`
-      : optionData.label;
-    option.disabled = isFull;
+    option.textContent = isPastSlot
+      ? `${optionData.label} (Unavailable)`
+      : isFull
+        ? held > 0
+          ? `${optionData.label} (On hold - try in ${holdMinutes} min)`
+          : `${optionData.label} (Full)`
+        : optionData.label;
+    option.disabled = isPastSlot || isFull;
     selectElement.appendChild(option);
   }
 
@@ -2309,7 +2324,7 @@ function renderServices() {
       </div>
     `;
     const timeSelect = editor.querySelector('.hydrogen-editor-time');
-    populateAvailableTimeOptions(timeSelect, selectedService.name, editorDate, activeSlot);
+    populateAvailableTimeOptions(timeSelect, selectedService.name, editorDate, activeSlot, editorTime);
     state.activeHydrogenSessionTime = timeSelect.value || SLOT_OPTIONS[0].value;
     const dateInput = editor.querySelector('.hydrogen-editor-date');
     dateInput.addEventListener('change', () => {
@@ -2532,10 +2547,16 @@ function renderServices() {
     `;
     const ivDateInput = editor.querySelector('.hydrogen-editor-date');
     const ivTimeSelect = editor.querySelector('.hydrogen-editor-time');
-    populateAvailableTimeOptions(ivTimeSelect, selectedService.name, editorDate, {
-      bookingDate: selection.bookingDate || '',
-      bookingTime: selection.bookingTime || '',
-    });
+    populateAvailableTimeOptions(
+      ivTimeSelect,
+      selectedService.name,
+      editorDate,
+      {
+        bookingDate: selection.bookingDate || '',
+        bookingTime: selection.bookingTime || '',
+      },
+      editorTime
+    );
     state.ivSelections[selectedService.name] = {
       ...(state.ivSelections[selectedService.name] || {}),
       editingTime: ivTimeSelect.value || editorTime || SLOT_OPTIONS[0].value,
@@ -2706,6 +2727,7 @@ function renderServices() {
     for (const slot of SLOT_OPTIONS) {
       const booked = Number(serviceAvailability[slot.value] || 0);
       const capacity = Number(state.slotCapacityByService[service.name] || 8);
+      const isPastSlot = isBookingSlotInPast(state.selectedServiceDate, slot.value);
       const slotRow = document.createElement('div');
       slotRow.className = 'service-slot-row';
       const slotTime = document.createElement('span');
@@ -2718,9 +2740,12 @@ function renderServices() {
         const seatBtn = document.createElement('button');
         seatBtn.type = 'button';
         seatBtn.className = `slot-seat-box${seatBooked ? ' is-booked' : ' is-available'}`;
-        seatBtn.disabled = seatBooked || state.slotAvailabilityLoading;
-        seatBtn.title = seatBooked ? 'Booked' : `Book ${slot.label}`;
-        seatBtn.setAttribute('aria-label', `${slot.label} seat ${seatIndex + 1} ${seatBooked ? 'booked' : 'available'}`);
+        seatBtn.disabled = seatBooked || isPastSlot || state.slotAvailabilityLoading;
+        seatBtn.title = seatBooked ? 'Booked' : isPastSlot ? 'Unavailable' : `Book ${slot.label}`;
+        seatBtn.setAttribute(
+          'aria-label',
+          `${slot.label} seat ${seatIndex + 1} ${seatBooked ? 'booked' : isPastSlot ? 'unavailable' : 'available'}`
+        );
         seatBtn.addEventListener('click', () => {
           openDialog();
           elements.serviceName.value = service.name;
@@ -2791,6 +2816,15 @@ function getTodayIsoDate() {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function isBookingSlotInPast(bookingDate, bookingTime) {
+  const normalizedDate = String(bookingDate || '').trim();
+  const normalizedTime = String(bookingTime || '').trim();
+  if (!normalizedDate || !normalizedTime) return false;
+  const slotDateTime = new Date(`${normalizedDate}T${normalizedTime}:00`);
+  if (Number.isNaN(slotDateTime.getTime())) return false;
+  return slotDateTime.getTime() < Date.now();
 }
 
 function getMaxBookingIsoDate() {
@@ -3603,9 +3637,10 @@ function renderAdminRows(bookings) {
 
   for (const booking of bookings) {
     const tr = document.createElement('tr');
-    tr.appendChild(cell(`${booking.clientName}\n${booking.clientMobile || '-'}`));
+    tr.appendChild(multilineCell(`${booking.clientName}\n${booking.clientMobile || '-'}`));
     tr.appendChild(cell(booking.serviceName));
-    tr.appendChild(cell(formatDateTime(booking.bookingDate, booking.bookingTime)));
+    tr.appendChild(multilineCell(formatAdminBookingDateTime(booking.bookingDate, booking.bookingTime)));
+    tr.appendChild(cell(formatBookingCreatedAtIndia(booking.createdAt)));
     tr.appendChild(statusCell(booking.status));
     tr.appendChild(paymentCell(booking.paymentStatus || 'unpaid'));
 
@@ -3778,6 +3813,9 @@ function removeSelectedDiscountUser(userId) {
   state.adminDiscountSelectedUsers = getSelectedDiscountUsers().filter(
     (user) => String(user.id) !== normalizedId
   );
+  if (!state.adminDiscountSelectedUsers.length) {
+    state.adminDiscountSelectedWindowOpen = false;
+  }
   render();
 }
 
@@ -3795,48 +3833,6 @@ function scheduleAdminDiscountSearch(query) {
   adminDiscountSearchTimer = window.setTimeout(() => {
     fetchAdminDiscountUsers(trimmed);
   }, 300);
-}
-
-async function createAdminDiscountUser() {
-  const name = String(elements.adminDiscountNewName?.value || '').trim();
-  const email = String(elements.adminDiscountNewEmail?.value || '').trim().toLowerCase();
-  const phone = String(elements.adminDiscountNewPhone?.value || '').trim();
-
-  if (!name || !email || !phone) {
-    alert('Name, email, and phone are required to add a new user.');
-    return;
-  }
-  if (!isLikelyEmail(email)) {
-    alert('Enter a valid email address.');
-    return;
-  }
-
-  try {
-    const result = await api('/api/admin/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, mobile: phone }),
-    });
-    if (!result?.user?.id) {
-      throw new Error('Unable to add the user.');
-    }
-
-    const nextSelected = getSelectedDiscountUsers();
-    const exists = nextSelected.some((user) => String(user.id) === String(result.user.id));
-    state.adminDiscountSelectedUsers = exists ? nextSelected : [...nextSelected, result.user];
-
-    if (Array.isArray(state.adminUsers)) {
-      const known = state.adminUsers.some((user) => String(user.id) === String(result.user.id));
-      if (!known) state.adminUsers = [...state.adminUsers, result.user];
-    }
-
-    if (elements.adminDiscountNewName) elements.adminDiscountNewName.value = '';
-    if (elements.adminDiscountNewEmail) elements.adminDiscountNewEmail.value = '';
-    if (elements.adminDiscountNewPhone) elements.adminDiscountNewPhone.value = '';
-    scheduleAdminDiscountSearch(state.adminDiscountSearch);
-  } catch (error) {
-    alert(error.message || 'Unable to add the user right now.');
-  }
 }
 
 async function fetchAdminDiscountUsers(query) {
@@ -3872,6 +3868,8 @@ function renderAdminDiscountUsers() {
   if (!state.adminDiscountUnlocked) {
     elements.adminDiscountUserResults.innerHTML = '';
     elements.adminDiscountUsersEmpty.hidden = true;
+    state.adminDiscountSelectedWindowOpen = false;
+    if (elements.adminDiscountSelectedWindow) elements.adminDiscountSelectedWindow.hidden = true;
     return;
   }
 
@@ -3884,6 +3882,7 @@ function renderAdminDiscountUsers() {
     const count = getSelectedDiscountUsers().length;
     elements.adminDiscountSelectedCount.textContent = `${count} selected`;
   }
+  renderAdminSelectedDiscountUsers();
 
   const users = Array.isArray(state.adminDiscountSearchResults) ? state.adminDiscountSearchResults : [];
   elements.adminDiscountUserResults.innerHTML = '';
@@ -3902,7 +3901,7 @@ function renderAdminDiscountUsers() {
   const trimmedQuery = String(state.adminDiscountSearch || '').trim();
   if (!users.length) {
     const emptyText = trimmedQuery
-      ? 'No users found. Add a new user below.'
+      ? 'No users found.'
       : 'Type to search users.';
     const emptyTextEl = elements.adminDiscountUsersEmpty.querySelector('p');
     if (emptyTextEl) emptyTextEl.textContent = emptyText;
@@ -3983,9 +3982,81 @@ async function applyAdminDiscountToSelected() {
 
   await loadDashboardData();
   await fetchAdminDiscountUsers(state.adminDiscountSearch);
+  state.adminDiscountSelectedUsers = [];
+  state.adminDiscountSelectedWindowOpen = false;
   if (failures.length) {
     alert(`Discount applied with some issues. Could not apply for: ${failures.join(', ')}.`);
+    render();
+    return;
   }
+  render();
+}
+
+function renderAdminSelectedDiscountUsers() {
+  if (
+    !elements.adminDiscountSelectedBtn ||
+    !elements.adminDiscountSelectedWindow ||
+    !elements.adminDiscountSelectedWindowCount ||
+    !elements.adminDiscountSelectedList
+  ) {
+    return;
+  }
+
+  const selectedUsers = getSelectedDiscountUsers();
+  const count = selectedUsers.length;
+  elements.adminDiscountSelectedBtn.textContent = count ? `Selected (${count})` : 'Selected';
+  elements.adminDiscountSelectedBtn.disabled = !count;
+  elements.adminDiscountSelectedWindowCount.textContent = `${count} selected`;
+  elements.adminDiscountSelectedWindow.hidden = !state.adminDiscountSelectedWindowOpen || !count;
+  elements.adminDiscountSelectedList.innerHTML = '';
+
+  if (!count) {
+    state.adminDiscountSelectedWindowOpen = false;
+    return;
+  }
+
+  selectedUsers.forEach((user) => {
+    const row = document.createElement('div');
+    row.className = 'admin-discount-selected-row';
+
+    const main = document.createElement('div');
+    main.className = 'admin-discount-selected-main';
+
+    const left = document.createElement('div');
+    left.className = 'admin-discount-selected-left';
+
+    const info = document.createElement('div');
+    info.className = 'admin-discount-selected-info';
+    const membershipStatus = String(user.membershipStatus || 'inactive').toLowerCase();
+    const isMember = membershipStatus === 'active';
+    const statusLabel = isMember ? 'Member' : 'User';
+    const email = user.email || 'no-email';
+    const phone = user.mobile || 'no-phone';
+    info.innerHTML = `
+      <strong>${escapeHtml(user.name || 'User')}</strong>
+      <span>${escapeHtml(email)}</span>
+      <span>${escapeHtml(phone)}</span>
+      <span>${escapeHtml(statusLabel)}</span>
+    `;
+
+    left.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'admin-discount-selected-actions';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-secondary';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      removeSelectedDiscountUser(user.id);
+    });
+
+    actions.appendChild(removeBtn);
+    main.append(left, actions);
+    row.appendChild(main);
+    elements.adminDiscountSelectedList.appendChild(row);
+  });
 }
 
 async function applyAdminUserDiscountRaw({ userId, email, phone, discountPercent }) {
@@ -4607,15 +4678,65 @@ function formatDateOnly(value) {
   }).format(date);
 }
 
-function formatDateTime(dateISO, time24) {
-  if (!dateISO || !time24) return '-';
-  const date = new Date(`${dateISO}T${time24}`);
+function formatBookingDateLabel(dateISO) {
+  const match = String(dateISO || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '-';
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(year, monthIndex, day, 12, 0, 0);
+  if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
+  }).format(date);
+}
+
+function formatBookingTimeLabel(time24) {
+  const normalized = String(time24 || '').trim();
+  if (!normalized) return '-';
+  const slot = SLOT_OPTIONS.find((item) => item.value === normalized);
+  if (slot?.label) return slot.label;
+  const match = normalized.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return normalized;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const date = new Date(2000, 0, 1, hours, minutes, 0);
+  if (Number.isNaN(date.getTime())) return normalized;
+  return new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
     minute: '2-digit',
+  }).format(date);
+}
+
+function formatDateTime(dateISO, time24) {
+  if (!dateISO || !time24) return '-';
+  return `${formatBookingDateLabel(dateISO)}, ${formatBookingTimeLabel(time24)}`;
+}
+
+function formatAdminBookingDateTime(dateISO, time24) {
+  if (!dateISO || !time24) return '-';
+  return `${formatBookingDateLabel(dateISO)}\n${formatBookingTimeLabel(time24)}`;
+}
+
+function formatBookingCreatedAtIndia(value) {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const normalized = raw.replace(' ', 'T');
+  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(normalized);
+  const parsed = Date.parse(hasExplicitTimezone ? normalized : `${normalized}Z`);
+  const date = new Date(parsed);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
   }).format(date);
 }
 
