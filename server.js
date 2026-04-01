@@ -3,6 +3,7 @@ const https = require('https');
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -297,6 +298,12 @@ const MEMBERSHIP_PLANS = [
 const MEMBERSHIP_VALIDITY_DAYS = Number(MEMBERSHIP_PLANS.find((plan) => plan.id === 'h2_single')?.validityDays || 90);
 
 const app = express();
+const cors = require("cors");
+app.use(cors({
+  origin: "*",
+  credentials: false,
+}));
+app.options('*', cors());
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const uploadsDir = path.resolve(process.env.UPLOADS_DIR || path.join(__dirname, 'uploads'));
 const dbPath = path.join(dataDir, 'booking.db');
@@ -597,7 +604,7 @@ app.post('/api/auth/register/complete', (req, res) => {
 
   db.prepare('DELETE FROM pending_registrations WHERE email = ?').run(email);
 
-  const user = {
+  const user = syncMembershipForUser({ userId: Number(result.lastInsertRowid), email }) || {
     id: Number(result.lastInsertRowid),
     name: String(pending.name || 'User'),
     email,
@@ -607,6 +614,7 @@ app.post('/api/auth/register/complete', (req, res) => {
     membershipStartedAt: null,
     membershipExpiresAt: null,
     membershipPeopleCount: null,
+    membershipSubscriptionId: null,
   };
 
   setAuthCookie(res, user);
@@ -625,7 +633,8 @@ app.post('/api/auth/login', (req, res) => {
       `SELECT id, name, email, password_hash, role, age, gender, mobile, avatar_url AS avatarUrl,
               membership_status AS membershipStatus, membership_plan AS membershipPlan,
               membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
-              membership_people_count AS membershipPeopleCount
+              membership_people_count AS membershipPeopleCount,
+              membership_subscription_id AS membershipSubscriptionId
        FROM users
        WHERE email = ?`
     )
@@ -646,20 +655,22 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ message: 'Invalid password.' });
   }
 
+  const syncedUser = syncMembershipForUser({ userId: Number(user.id), email: normalizedEmail }) || getUserProfileById(Number(user.id)) || user;
   const authUser = {
-    id: Number(user.id),
-    name: String(user.name),
-    email: String(user.email),
-    role: String(user.role || 'user'),
-    age: user.age ?? null,
-    gender: user.gender || '',
-    mobile: user.mobile || '',
-    avatarUrl: user.avatarUrl || '',
-    membershipStatus: user.membershipStatus || 'inactive',
-    membershipPlan: user.membershipPlan || '',
-    membershipStartedAt: user.membershipStartedAt || null,
-    membershipExpiresAt: user.membershipExpiresAt || null,
-    membershipPeopleCount: user.membershipPeopleCount ?? null,
+    id: Number(syncedUser.id),
+    name: String(syncedUser.name),
+    email: String(syncedUser.email),
+    role: String(syncedUser.role || 'user'),
+    age: syncedUser.age ?? null,
+    gender: syncedUser.gender || '',
+    mobile: syncedUser.mobile || '',
+    avatarUrl: syncedUser.avatarUrl || '',
+    membershipStatus: syncedUser.membershipStatus || 'inactive',
+    membershipPlan: syncedUser.membershipPlan || '',
+    membershipStartedAt: syncedUser.membershipStartedAt || null,
+    membershipExpiresAt: syncedUser.membershipExpiresAt || null,
+    membershipPeopleCount: syncedUser.membershipPeopleCount ?? null,
+    membershipSubscriptionId: syncedUser.membershipSubscriptionId || null,
   };
 
   setAuthCookie(res, authUser);
@@ -808,7 +819,8 @@ app.get('/api/profile', requireAuth, (req, res) => {
     `SELECT id, name, role, age, gender, mobile, avatar_url AS avatarUrl,
             membership_status AS membershipStatus, membership_plan AS membershipPlan,
             membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
-            membership_people_count AS membershipPeopleCount
+            membership_people_count AS membershipPeopleCount,
+            membership_subscription_id AS membershipSubscriptionId
      FROM users
      WHERE id = ?`
   ).get(req.user.id);
@@ -1110,6 +1122,7 @@ app.get('/api/membership/plans', requireAuth, (req, res) => {
       startedAt: req.user.membershipStartedAt || null,
       expiresAt: req.user.membershipExpiresAt || null,
       peopleCount: req.user.membershipPeopleCount ?? null,
+      subscriptionId: req.user.membershipSubscriptionId || null,
     },
     plans: MEMBERSHIP_PLANS,
   });
@@ -1221,6 +1234,13 @@ app.post('/api/membership/create-order', requireAuth, async (req, res) => {
     return res.status(400).json({ message: memberDetailsResult.error });
   }
   const memberDetails = memberDetailsResult.data;
+  if (!memberDetails.some((member) => String(member.email || '').trim().toLowerCase() === String(req.user.email || '').trim().toLowerCase())) {
+    return res.status(400).json({ message: 'Buyer email must be included in the membership member list.' });
+  }
+  const subscriptionConflict = validateSubscriptionMemberConflicts(getMembershipSubscriptionId(req.user.id), memberDetails);
+  if (subscriptionConflict.error) {
+    return res.status(409).json({ message: subscriptionConflict.error });
+  }
 
   try {
     const order = await razorpay.orders.create({
@@ -1305,6 +1325,7 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
   const pendingOrder = db
     .prepare(
       `SELECT order_id AS orderId, user_id AS userId, plan_id AS planId, people_count AS peopleCount, status,
+              member_details_json AS memberDetailsJson,
               coupon_id AS couponId, discount_amount_paise AS discountAmountPaise
        FROM membership_payment_orders
        WHERE order_id = ?`
@@ -1325,6 +1346,20 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
   }
 
   const peopleCount = Number(pendingOrder.peopleCount || plan.peopleCount || 1);
+  let memberDetails = [];
+  try {
+    memberDetails = pendingOrder.memberDetailsJson ? JSON.parse(pendingOrder.memberDetailsJson) : [];
+  } catch {
+    memberDetails = [];
+  }
+  const memberDetailsResult = normalizeMembershipMembers(memberDetails, peopleCount);
+  if (memberDetailsResult.error) {
+    return res.status(400).json({ message: memberDetailsResult.error });
+  }
+  memberDetails = memberDetailsResult.data;
+  if (!memberDetails.some((member) => String(member.email || '').trim().toLowerCase() === String(req.user.email || '').trim().toLowerCase())) {
+    return res.status(400).json({ message: 'Buyer email must be included in the membership member list.' });
+  }
 
   const expectedSignature = crypto
     .createHmac('sha256', RAZORPAY_KEY_SECRET)
@@ -1338,7 +1373,8 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
   const existingUser = db
     .prepare(
       `SELECT membership_status AS membershipStatus, membership_plan AS membershipPlan,
-              membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt
+              membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
+              membership_subscription_id AS membershipSubscriptionId
        FROM users
        WHERE id = ?`
     )
@@ -1361,6 +1397,10 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
       : new Date(now.getTime() + Number(plan.validityDays || MEMBERSHIP_VALIDITY_DAYS) * 24 * 60 * 60 * 1000).toISOString();
   const membershipPlanId =
     plan.id === 'h2_add_person' ? String(existingUser?.membershipPlan || req.user.membershipPlan || 'h2_single') : plan.id;
+  const subscriptionId =
+    existingUser?.membershipSubscriptionId ||
+    req.user.membershipSubscriptionId ||
+    getMembershipSubscriptionId(req.user.id);
 
   db.prepare(
     `UPDATE users
@@ -1368,9 +1408,10 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
          membership_plan = ?,
          membership_started_at = ?,
          membership_expires_at = ?,
-         membership_people_count = ?
+         membership_people_count = ?,
+         membership_subscription_id = ?
      WHERE id = ?`
-  ).run(membershipPlanId, startedAt, expiresAt, peopleCount, req.user.id);
+  ).run(membershipPlanId, startedAt, expiresAt, peopleCount, subscriptionId, req.user.id);
 
   db.prepare(
     `UPDATE membership_payment_orders
@@ -1390,14 +1431,23 @@ app.post('/api/membership/verify', requireAuth, (req, res) => {
     });
   }
 
-  const profile = db.prepare(
-    `SELECT id, name, role, age, gender, mobile, avatar_url AS avatarUrl,
-            membership_status AS membershipStatus, membership_plan AS membershipPlan,
-            membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
-            membership_people_count AS membershipPeopleCount
-     FROM users
-     WHERE id = ?`
-  ).get(req.user.id);
+  const saveMembersResult = saveMembershipSubscriptionMembers({
+    ownerUserId: req.user.id,
+    subscriptionId,
+    planId: membershipPlanId,
+    peopleCount,
+    startedAt,
+    expiresAt,
+    members: memberDetails.map((member) => ({
+      ...member,
+      email: String(member.email || '').trim().toLowerCase(),
+    })),
+  });
+  if (saveMembersResult.error) {
+    return res.status(409).json({ message: saveMembersResult.error });
+  }
+
+  const profile = syncMembershipForUser({ userId: req.user.id, email: req.user.email }) || getUserProfileById(req.user.id);
 
   return res.json({
     message:
@@ -5222,6 +5272,329 @@ function markBookingPaid(bookingId, paymentOrderId, paymentRef) {
   ).run(orderId, orderId, paymentId, paymentId, Number(bookingId));
 }
 
+const USER_PROFILE_SELECT = `SELECT id, name, email, role, age, gender, mobile, avatar_url AS avatarUrl,
+        membership_status AS membershipStatus, membership_plan AS membershipPlan,
+        membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
+        membership_people_count AS membershipPeopleCount, membership_subscription_id AS membershipSubscriptionId
+ FROM users`;
+
+function getMembershipSubscriptionId(ownerUserId) {
+  return Number.isInteger(Number(ownerUserId)) ? `membership:${Number(ownerUserId)}` : '';
+}
+
+function getUserProfileById(userId) {
+  if (!Number.isInteger(Number(userId))) return null;
+  return db.prepare(`${USER_PROFILE_SELECT} WHERE id = ?`).get(Number(userId));
+}
+
+function getUserProfileByEmail(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  return db.prepare(`${USER_PROFILE_SELECT} WHERE email = ?`).get(normalizedEmail);
+}
+
+function refreshMembershipSubscriptionStates() {
+  db.prepare(
+    `UPDATE membership_subscriptions
+     SET status = CASE
+       WHEN datetime(expires_at) <= datetime('now') THEN 'expired'
+       ELSE 'active'
+     END,
+         updated_at = datetime('now')`
+  ).run();
+}
+
+function getMembershipSubscriptionById(subscriptionId) {
+  const normalizedId = String(subscriptionId || '').trim();
+  if (!normalizedId) return null;
+  refreshMembershipSubscriptionStates();
+  return db
+    .prepare(
+      `SELECT subscription_id AS subscriptionId, owner_user_id AS ownerUserId, plan_id AS planId,
+              people_count AS peopleCount, status, started_at AS startedAt, expires_at AS expiresAt
+       FROM membership_subscriptions
+       WHERE subscription_id = ?`
+    )
+    .get(normalizedId);
+}
+
+function isMembershipSubscriptionActive(subscription) {
+  if (!subscription) return false;
+  if (String(subscription.status || '').toLowerCase() !== 'active') return false;
+  const expiresAt = subscription.expiresAt ? new Date(subscription.expiresAt).getTime() : NaN;
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function findMembershipMemberByEmail(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  refreshMembershipSubscriptionStates();
+  return db
+    .prepare(
+      `SELECT mm.id, mm.subscription_id AS subscriptionId, mm.user_id AS userId, mm.email, mm.name, mm.place,
+              mm.contact_number AS contactNumber, mm.is_registered AS isRegistered,
+              ms.owner_user_id AS ownerUserId, ms.plan_id AS planId, ms.people_count AS peopleCount,
+              ms.status, ms.started_at AS startedAt, ms.expires_at AS expiresAt
+       FROM membership_subscription_members mm
+       JOIN membership_subscriptions ms ON ms.subscription_id = mm.subscription_id
+       WHERE mm.email = ?
+       ORDER BY CASE WHEN ms.status = 'active' THEN 0 ELSE 1 END, datetime(ms.expires_at) DESC, mm.id DESC
+       LIMIT 1`
+    )
+    .get(normalizedEmail);
+}
+
+function setUserMembershipState(userId, subscription) {
+  if (!Number.isInteger(Number(userId))) return;
+  if (subscription && isMembershipSubscriptionActive(subscription)) {
+    db.prepare(
+      `UPDATE users
+       SET membership_status = 'active',
+           membership_plan = ?,
+           membership_started_at = ?,
+           membership_expires_at = ?,
+           membership_people_count = ?,
+           membership_subscription_id = ?
+       WHERE id = ?`
+    ).run(
+      String(subscription.planId || ''),
+      subscription.startedAt || null,
+      subscription.expiresAt || null,
+      Number(subscription.peopleCount || 1),
+      String(subscription.subscriptionId || ''),
+      Number(userId)
+    );
+    return;
+  }
+
+  db.prepare(
+    `UPDATE users
+     SET membership_status = 'inactive',
+         membership_plan = NULL,
+         membership_started_at = NULL,
+         membership_expires_at = NULL,
+         membership_people_count = NULL,
+         membership_subscription_id = NULL
+     WHERE id = ?`
+  ).run(Number(userId));
+}
+
+function syncMembershipStatusForSubscription(subscriptionId) {
+  const subscription = getMembershipSubscriptionById(subscriptionId);
+  const members = db
+    .prepare(
+      `SELECT user_id AS userId
+       FROM membership_subscription_members
+       WHERE subscription_id = ?
+         AND user_id IS NOT NULL`
+    )
+    .all(String(subscriptionId || ''));
+
+  members.forEach((member) => {
+    if (Number.isInteger(Number(member.userId))) {
+      setUserMembershipState(member.userId, subscription);
+    }
+  });
+}
+
+function syncMembershipForUser({ userId, email } = {}) {
+  const numericUserId = Number(userId);
+  let user = Number.isInteger(numericUserId) ? getUserProfileById(numericUserId) : null;
+  const normalizedEmail = String(email || user?.email || '').trim().toLowerCase();
+  if (!user && normalizedEmail) {
+    user = getUserProfileByEmail(normalizedEmail);
+  }
+  if (!user) return null;
+
+  const linkedMember = findMembershipMemberByEmail(normalizedEmail);
+  if (!linkedMember) {
+    if (user.membershipSubscriptionId) {
+      setUserMembershipState(user.id, null);
+    }
+    return getUserProfileById(user.id);
+  }
+
+  if (!linkedMember.userId || Number(linkedMember.userId) !== Number(user.id) || Number(linkedMember.isRegistered) !== 1) {
+    db.prepare(
+      `UPDATE membership_subscription_members
+       SET user_id = ?, is_registered = 1, updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(Number(user.id), Number(linkedMember.id));
+  }
+
+  setUserMembershipState(user.id, linkedMember);
+  return getUserProfileById(user.id);
+}
+
+function validateSubscriptionMemberConflicts(subscriptionId, members) {
+  for (const member of Array.isArray(members) ? members : []) {
+    const existing = db
+      .prepare(
+        `SELECT mm.email, mm.subscription_id AS subscriptionId
+         FROM membership_subscription_members mm
+         JOIN membership_subscriptions ms ON ms.subscription_id = mm.subscription_id
+         WHERE mm.email = ?
+           AND mm.subscription_id <> ?
+           AND ms.status = 'active'
+           AND datetime(ms.expires_at) > datetime('now')
+         LIMIT 1`
+      )
+      .get(String(member?.email || '').trim().toLowerCase(), String(subscriptionId || ''));
+
+    if (existing) {
+      return {
+        error: `${member.email} is already linked to another active subscription. Remove it there before reusing it here.`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+function saveMembershipSubscriptionMembers({ ownerUserId, subscriptionId, planId, peopleCount, startedAt, expiresAt, members }) {
+  const normalizedSubscriptionId = String(subscriptionId || '').trim();
+  if (!normalizedSubscriptionId) {
+    return { error: 'Missing subscription id.' };
+  }
+
+  const conflict = validateSubscriptionMemberConflicts(normalizedSubscriptionId, members);
+  if (conflict.error) return conflict;
+
+  db.prepare(
+    `INSERT INTO membership_subscriptions (
+      subscription_id, owner_user_id, plan_id, people_count, status, started_at, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'active', ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(subscription_id) DO UPDATE SET
+      owner_user_id = excluded.owner_user_id,
+      plan_id = excluded.plan_id,
+      people_count = excluded.people_count,
+      status = 'active',
+      started_at = excluded.started_at,
+      expires_at = excluded.expires_at,
+      updated_at = datetime('now')`
+  ).run(
+    normalizedSubscriptionId,
+    Number(ownerUserId),
+    String(planId || ''),
+    Number(peopleCount || 1),
+    startedAt || null,
+    expiresAt || null
+  );
+
+  const previousMembers = db
+    .prepare(
+      `SELECT DISTINCT user_id AS userId
+       FROM membership_subscription_members
+       WHERE subscription_id = ?
+         AND user_id IS NOT NULL`
+    )
+    .all(normalizedSubscriptionId);
+
+  db.prepare('DELETE FROM membership_subscription_members WHERE subscription_id = ?').run(normalizedSubscriptionId);
+
+  const insertMember = db.prepare(
+    `INSERT INTO membership_subscription_members (
+      subscription_id, user_id, email, name, place, contact_number, is_registered, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+  );
+
+  for (const member of members) {
+    const matchedUser = getUserByEmail(member.email);
+    const userId = Number(matchedUser?.id || 0) || null;
+    const isRegistered = userId ? 1 : 0;
+    insertMember.run(
+      normalizedSubscriptionId,
+      userId,
+      String(member.email || '').trim().toLowerCase(),
+      String(member.name || '').trim(),
+      String(member.place || '').trim(),
+      String(member.contactNumber || '').trim(),
+      isRegistered
+    );
+  }
+
+  syncMembershipStatusForSubscription(normalizedSubscriptionId);
+  previousMembers.forEach((member) => {
+    if (Number.isInteger(Number(member.userId))) {
+      syncMembershipForUser({ userId: Number(member.userId) });
+    }
+  });
+  return { ok: true };
+}
+
+function backfillMembershipSubscriptionsFromOrders() {
+  const paidOrders = db
+    .prepare(
+      `SELECT mpo.order_id AS orderId, mpo.user_id AS userId, mpo.plan_id AS planId,
+              mpo.people_count AS peopleCount, mpo.member_details_json AS memberDetailsJson,
+              mpo.paid_at AS paidAt, mpo.created_at AS createdAt,
+              u.email AS ownerEmail,
+              u.membership_plan AS membershipPlan,
+              u.membership_started_at AS membershipStartedAt,
+              u.membership_expires_at AS membershipExpiresAt
+       FROM membership_payment_orders mpo
+       JOIN users u ON u.id = mpo.user_id
+       WHERE mpo.status = 'paid'
+       ORDER BY mpo.user_id ASC, datetime(COALESCE(mpo.paid_at, mpo.created_at)) DESC, mpo.created_at DESC`
+    )
+    .all();
+
+  const processedOwners = new Set();
+  for (const order of paidOrders) {
+    const ownerUserId = Number(order.userId);
+    if (!Number.isInteger(ownerUserId) || processedOwners.has(ownerUserId)) continue;
+    processedOwners.add(ownerUserId);
+
+    const subscriptionId = getMembershipSubscriptionId(ownerUserId);
+    const existingMembers = db
+      .prepare(
+        `SELECT COUNT(1) AS count
+         FROM membership_subscription_members
+         WHERE subscription_id = ?`
+      )
+      .get(subscriptionId);
+    if (Number(existingMembers?.count || 0) > 0) continue;
+
+    let members = [];
+    try {
+      members = order.memberDetailsJson ? JSON.parse(order.memberDetailsJson) : [];
+    } catch {
+      members = [];
+    }
+
+    const expectedCount = Number(order.peopleCount || 1);
+    const membersResult = normalizeMembershipMembers(members, expectedCount);
+    if (membersResult.error) continue;
+
+    const normalizedMembers = membersResult.data;
+    const ownerEmail = String(order.ownerEmail || '').trim().toLowerCase();
+    if (!normalizedMembers.some((member) => String(member.email || '').trim().toLowerCase() === ownerEmail)) {
+      continue;
+    }
+
+    const startedAt = order.membershipStartedAt || order.paidAt || order.createdAt || new Date().toISOString();
+    const planId =
+      String(order.membershipPlan || '').trim() ||
+      (String(order.planId || '').trim() === 'h2_add_person' ? 'h2_single' : String(order.planId || '').trim());
+    const plan = MEMBERSHIP_PLANS.find((item) => item.id === planId) || MEMBERSHIP_PLANS.find((item) => item.id === 'h2_single');
+    const expiresAt =
+      order.membershipExpiresAt ||
+      new Date(
+        new Date(startedAt).getTime() + Number(plan?.validityDays || MEMBERSHIP_VALIDITY_DAYS) * 24 * 60 * 60 * 1000
+      ).toISOString();
+
+    saveMembershipSubscriptionMembers({
+      ownerUserId,
+      subscriptionId,
+      planId,
+      peopleCount: expectedCount,
+      startedAt,
+      expiresAt,
+      members: normalizedMembers,
+    });
+  }
+}
+
 function setAuthCookie(res, user) {
   const token = jwt.sign(
     { sub: user.id, name: user.name, email: user.email, role: user.role },
@@ -5243,16 +5616,8 @@ function requireAuth(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = db
-      .prepare(
-        `SELECT id, name, email, role, age, gender, mobile, avatar_url AS avatarUrl,
-                membership_status AS membershipStatus, membership_plan AS membershipPlan,
-                membership_started_at AS membershipStartedAt, membership_expires_at AS membershipExpiresAt,
-                membership_people_count AS membershipPeopleCount
-         FROM users
-         WHERE id = ?`
-      )
-      .get(Number(payload.sub));
+    syncMembershipForUser({ userId: Number(payload.sub) });
+    const user = getUserProfileById(Number(payload.sub));
 
     if (!user) return res.status(401).json({ message: 'unauthorized' });
 
@@ -5270,6 +5635,7 @@ function requireAuth(req, res, next) {
       membershipStartedAt: user.membershipStartedAt || null,
       membershipExpiresAt: user.membershipExpiresAt || null,
       membershipPeopleCount: user.membershipPeopleCount ?? null,
+      membershipSubscriptionId: user.membershipSubscriptionId || null,
     };
 
     return next();
@@ -5353,6 +5719,7 @@ function normalizeMembershipMembers(rawMembers, expectedCount) {
   }
 
   const normalized = [];
+  const seenEmails = new Set();
   for (let i = 0; i < rawMembers.length; i += 1) {
     const item = rawMembers[i] || {};
     const name = String(item.name || '').trim();
@@ -5366,6 +5733,10 @@ function normalizeMembershipMembers(rawMembers, expectedCount) {
     if (!isValidEmail(email)) {
       return { error: `Member ${i + 1}: valid email is required.` };
     }
+    if (seenEmails.has(email)) {
+      return { error: `Member ${i + 1}: duplicate email entries are not allowed.` };
+    }
+    seenEmails.add(email);
 
     normalized.push({ name, place, email, contactNumber });
   }
@@ -6099,6 +6470,32 @@ function migrate() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS membership_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL,
+      people_count INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS membership_subscription_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subscription_id TEXT NOT NULL REFERENCES membership_subscriptions(subscription_id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      place TEXT NOT NULL,
+      contact_number TEXT NOT NULL,
+      is_registered INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(subscription_id, email)
+    );
+
     CREATE TABLE IF NOT EXISTS coupons (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT NOT NULL UNIQUE,
@@ -6154,6 +6551,10 @@ function migrate() {
       ON bookings(user_id, booking_date, booking_time);
     CREATE INDEX IF NOT EXISTS idx_admin_discount_phones_phone_key
       ON admin_discount_phones(phone_key);
+    CREATE INDEX IF NOT EXISTS idx_membership_subscription_members_email
+      ON membership_subscription_members(email);
+    CREATE INDEX IF NOT EXISTS idx_membership_subscriptions_owner
+      ON membership_subscriptions(owner_user_id, status, expires_at);
   `);
 
   if (!hasColumn('users', 'role')) {
@@ -6194,6 +6595,10 @@ function migrate() {
 
   if (!hasColumn('users', 'membership_people_count')) {
     db.exec('ALTER TABLE users ADD COLUMN membership_people_count INTEGER');
+  }
+
+  if (!hasColumn('users', 'membership_subscription_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN membership_subscription_id TEXT');
   }
 
   if (!hasColumn('bookings', 'doctor_id')) {
@@ -6332,6 +6737,19 @@ function migrate() {
   db.exec("UPDATE users SET role = 'user' WHERE role = 'doctor'");
   db.exec("UPDATE users SET membership_status = 'inactive' WHERE membership_status IS NULL OR membership_status = ''");
   db.exec("UPDATE doctors SET approval_status = 'approved' WHERE approval_status IS NULL OR approval_status = ''");
+
+  backfillMembershipSubscriptionsFromOrders();
+  refreshMembershipSubscriptionStates();
+  const linkedSubscriptions = db
+    .prepare(
+      `SELECT DISTINCT subscription_id AS subscriptionId
+       FROM membership_subscription_members
+       WHERE user_id IS NOT NULL`
+    )
+    .all();
+  linkedSubscriptions.forEach((row) => {
+    syncMembershipStatusForSubscription(row.subscriptionId);
+  });
 }
 
 function seedDoctors() {

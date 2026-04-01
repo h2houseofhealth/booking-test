@@ -1,3 +1,5 @@
+const API_URL = 'http://52.65.71.35:3000';
+
 const state = {
   user: null,
   bookings: [],
@@ -826,6 +828,7 @@ async function loadCurrentUser() {
   try {
     const result = await api('/api/auth/me');
     state.user = result.user;
+    syncPostLoginChoiceWithMembership();
   } catch {
     state.user = null;
   }
@@ -834,6 +837,14 @@ async function loadCurrentUser() {
 async function loadProfile() {
   const result = await api('/api/profile');
   state.user = { ...state.user, ...result.profile };
+  syncPostLoginChoiceWithMembership();
+}
+
+function syncPostLoginChoiceWithMembership() {
+  if (state.user?.role !== 'user') return;
+  if (isCurrentUserMembershipActive()) {
+    state.postLoginChoice = 'continue-member';
+  }
 }
 
 function isAdminCustomerFormReady() {
@@ -4741,17 +4752,12 @@ function formatBookingCreatedAtIndia(value) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: 'include',
+  const targetUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
+  const response = await fetch(targetUrl, {
     ...options,
   });
 
-  if (response.status === 204) return null;
-
-  const contentType = response.headers.get('content-type') || '';
-  const isJson = contentType.includes('application/json');
-  const data = isJson ? await response.json() : {};
-
+  const data = await response.json();
   if (!response.ok) {
     throw new Error(data.message || 'Request failed');
   }

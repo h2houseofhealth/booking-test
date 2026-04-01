@@ -1,4 +1,6 @@
+const API_URL = 'http://52.65.71.35:3000';
 const token = new URLSearchParams(window.location.search).get('token') || '';
+console.log('TOKEN:', token);
 
 const elements = {
   paymentLead: document.getElementById('paymentLead'),
@@ -165,8 +167,8 @@ async function handlePayNow() {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: 'include',
+  const targetUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
+  const response = await fetch(targetUrl, {
     ...options,
   });
 
