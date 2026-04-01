@@ -1,4 +1,6 @@
-const API_URL = 'http://52.65.71.35:3000';
+const API_URL = window.location.hostname === "localhost"
+  ? ""
+  : "http://52.65.71.35:3000";
 
 const state = {
   user: null,
@@ -286,7 +288,18 @@ function attachEvents() {
   });
 
   elements.logoutBtn.addEventListener('click', async () => {
-    await api('/api/auth/logout', { method: 'POST' });
+    const response = await fetch(`${API_URL}/api/auth/logout`, { method: 'POST' });
+    if (!response.ok) {
+      let message = 'Logout failed.';
+      try {
+        const data = await response.json();
+        message = data?.message || message;
+      } catch {
+        // ignore json parsing errors for empty responses
+      }
+      alert(message);
+      return;
+    }
     state.user = null;
     state.bookings = [];
     state.services = [];
