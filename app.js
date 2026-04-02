@@ -1,7 +1,4 @@
-const API_URL = window.location.hostname === "localhost"
-  ? ""
-  : "http://52.65.71.35:3000";
-
+const API_URL = "";
 const state = {
   user: null,
   bookings: [],
@@ -47,6 +44,7 @@ const state = {
   slotHoldCounts: {},
   bookingHoldMinutes: 10,
   slotAvailabilityLoading: false,
+  slotAutoShiftedNotice: '',
   adminDiscountUnlocked: false,
   adminDiscountSearch: '',
   adminDiscountDropdownOpen: false,
@@ -54,6 +52,9 @@ const state = {
   adminDiscountSearchLoading: false,
   adminDiscountSelectedUsers: [],
   adminDiscountSelectedWindowOpen: false,
+  adminBookingNotesByBooking: {},
+  adminBookingNotesLoading: false,
+  adminBookingNoteEdits: {},
   filters: {
     search: '',
     status: 'all',
@@ -62,17 +63,17 @@ const state = {
 };
 
 const SLOT_OPTIONS = [
-  { value: '09:30', label: '9:30 AM - 11:00 AM' },
-  { value: '10:30', label: '10:30 AM - 12:00 PM' },
-  { value: '11:30', label: '11:30 AM - 1:00 PM' },
-  { value: '12:30', label: '12:30 PM - 2:00 PM' },
-  { value: '13:30', label: '1:30 PM - 3:00 PM' },
-  { value: '14:30', label: '2:30 PM - 4:00 PM' },
-  { value: '15:30', label: '3:30 PM - 5:00 PM' },
-  { value: '16:30', label: '4:30 PM - 6:00 PM' },
-  { value: '17:30', label: '5:30 PM - 7:00 PM' },
-  { value: '18:30', label: '6:30 PM - 8:00 PM' },
-  { value: '19:30', label: '7:30 PM - 9:00 PM' },
+  { value: '09:30', label: '9:30 AM - 10:30 AM' },
+  { value: '10:30', label: '10:30 AM - 11:30 AM' },
+  { value: '11:30', label: '11:30 AM - 12:30 PM' },
+  { value: '12:30', label: '12:30 PM - 1:30 PM' },
+  { value: '13:30', label: '1:30 PM - 2:30 PM' },
+  { value: '14:30', label: '2:30 PM - 3:30 PM' },
+  { value: '15:30', label: '3:30 PM - 4:30 PM' },
+  { value: '16:30', label: '4:30 PM - 5:30 PM' },
+  { value: '17:30', label: '5:30 PM - 6:30 PM' },
+  { value: '18:30', label: '6:30 PM - 7:30 PM' },
+  { value: '19:30', label: '7:30 PM - 8:30 PM' },
 ];
 const BOOKING_WINDOW_DAYS = 60;
 const IV_REBOOK_COOLDOWN_DAYS = 14;
@@ -146,8 +147,24 @@ const elements = {
   membershipPlans: document.getElementById('membershipPlans'),
   membershipStatusText: document.getElementById('membershipStatusText'),
   memberFlowLabel: document.getElementById('memberFlowLabel'),
+  membershipActivePanel: document.getElementById('membershipActivePanel'),
+  membershipBrowsePanel: document.getElementById('membershipBrowsePanel'),
+  membershipActiveTitle: document.getElementById('membershipActiveTitle'),
+  membershipActiveMeta: document.getElementById('membershipActiveMeta'),
+  membershipActiveSessions: document.getElementById('membershipActiveSessions'),
+  membershipActiveMembers: document.getElementById('membershipActiveMembers'),
+  membershipActiveValidTill: document.getElementById('membershipActiveValidTill'),
+  membershipSnippetList: document.getElementById('membershipSnippetList'),
+  membershipSnippetCount: document.getElementById('membershipSnippetCount'),
   membershipBackBtn: document.getElementById('membershipBackBtn'),
   membershipNextBtn: document.getElementById('membershipNextBtn'),
+  bookingNotesDialog: document.getElementById('bookingNotesDialog'),
+  bookingNotesCloseBtn: document.getElementById('bookingNotesCloseBtn'),
+  bookingNotesAddBtn: document.getElementById('bookingNotesAddBtn'),
+  bookingNotesInput: document.getElementById('bookingNotesInput'),
+  bookingNotesList: document.getElementById('bookingNotesList'),
+  bookingNotesEmpty: document.getElementById('bookingNotesEmpty'),
+  bookingNotesBookingId: document.getElementById('bookingNotesBookingId'),
   servicesBackBtn: document.getElementById('servicesBackBtn'),
   servicesNextBtn: document.getElementById('servicesNextBtn'),
   bookingsBackBtn: document.getElementById('bookingsBackBtn'),
@@ -326,6 +343,12 @@ function attachEvents() {
     state.adminDiscountSearchLoading = false;
     state.adminDiscountSelectedUsers = [];
     state.adminDiscountSelectedWindowOpen = false;
+    state.adminBookingNotesByBooking = {};
+    state.adminBookingNotesLoading = false;
+    state.adminBookingNoteEdits = {};
+    state.adminBookingNotesByBooking = {};
+    state.adminBookingNotesLoading = false;
+    state.adminBookingNoteEdits = {};
     state.selectedServiceCategory = null;
     state.selectedSingleSessionServiceName = '';
     state.singleSessionEditingBookingId = '';
@@ -342,6 +365,7 @@ function attachEvents() {
     state.slotAvailability = {};
     state.slotCapacityByService = {};
     state.slotAvailabilityLoading = false;
+    state.slotAutoShiftedNotice = '';
     isForgotPasswordMode = false;
     signupStage = 'details';
     pendingSignupEmail = '';
@@ -570,6 +594,10 @@ function attachEvents() {
     state.adminDiscountSelectedWindowOpen = !state.adminDiscountSelectedWindowOpen;
     render();
   });
+  elements.bookingNotesAddBtn?.addEventListener('click', async () => {
+    await addBookingNote();
+  });
+  elements.bookingNotesCloseBtn?.addEventListener('click', closeBookingNotesDialog);
   elements.adminCouponForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     await saveAdminCoupon({ sendEmail: true });
@@ -886,6 +914,7 @@ async function refreshAdminCustomerContext() {
   state.slotAvailability = {};
   state.slotCapacityByService = {};
   state.slotAvailabilityLoading = false;
+  state.slotAutoShiftedNotice = '';
   try {
     await loadDashboardData();
     if (!isAdminCustomerFormReady()) {
@@ -986,6 +1015,7 @@ async function loadDashboardData() {
   if (state.selectedServiceCategory) {
     await loadServiceAvailability();
   }
+  state.slotAutoShiftedNotice = '';
 }
 
 async function loadServiceAvailability() {
@@ -1009,6 +1039,21 @@ async function loadServiceAvailability() {
     state.slotCapacityByService = result.slotCapacityByService || {};
     state.slotHoldCounts = result.holds || {};
     state.bookingHoldMinutes = Number(result.holdMinutes || BOOKING_HOLD_MINUTES) || BOOKING_HOLD_MINUTES;
+    const todayIso = getTodayIsoDate();
+    const hasFutureSlots = SLOT_OPTIONS.some(
+      (slot) => !isBookingSlotInPast(state.selectedServiceDate, slot.value)
+    );
+    if (!hasFutureSlots && state.selectedServiceDate === todayIso) {
+      state.slotAutoShiftedNotice = 'Today has no remaining slots. Showing the next available day.';
+      state.selectedServiceDate = getTomorrowIsoDate();
+      state.slotAvailability = {};
+      state.slotCapacityByService = {};
+      state.slotHoldCounts = {};
+      state.slotAvailabilityLoading = true;
+      renderServices();
+      await loadServiceAvailability();
+      return;
+    }
   } catch {
     if (requestId !== availabilityRequestId) return;
     state.slotAvailability = {};
@@ -1040,6 +1085,7 @@ function resetServiceBrowserState() {
   state.slotCapacityByService = {};
   state.slotHoldCounts = {};
   state.slotAvailabilityLoading = false;
+  state.slotAutoShiftedNotice = '';
 }
 
 function getHydrogenSlotsForSubmit(requiredSlots) {
@@ -1660,10 +1706,213 @@ async function deleteBooking(booking) {
 
   await api(`/api/bookings/${booking.id}`, { method: 'DELETE' });
   await loadDashboardData();
+  if (state.selectedServiceCategory) {
+    await loadServiceAvailability();
+  }
   if (booking.bookingGroupId && booking.bookingGroupId === state.hydrogenEditingGroupId) {
     resetHydrogenComposer();
   }
   render();
+}
+
+function openBookingNotesDialog(bookingId) {
+  if (!elements.bookingNotesDialog || !elements.bookingNotesBookingId) return;
+  elements.bookingNotesBookingId.value = String(bookingId || '');
+  if (elements.bookingNotesInput) elements.bookingNotesInput.value = '';
+  if (elements.bookingNotesDialog.open) {
+    elements.bookingNotesDialog.close();
+  }
+  elements.bookingNotesDialog.showModal();
+  fetchBookingNotes(bookingId);
+}
+
+function closeBookingNotesDialog() {
+  if (!elements.bookingNotesDialog) return;
+  elements.bookingNotesDialog.close();
+}
+
+function getBookingNotes(bookingId) {
+  const key = String(bookingId || '');
+  const notes = state.adminBookingNotesByBooking?.[key];
+  return Array.isArray(notes) ? notes : [];
+}
+
+async function fetchBookingNotes(bookingId) {
+  if (!bookingId) return;
+  state.adminBookingNotesLoading = true;
+  renderBookingNotes();
+  try {
+    const result = await api(`/api/bookings/${encodeURIComponent(bookingId)}/notes`);
+    const notes = Array.isArray(result?.notes) ? result.notes : [];
+    state.adminBookingNotesByBooking = {
+      ...(state.adminBookingNotesByBooking || {}),
+      [String(bookingId)]: notes,
+    };
+    if (!Array.isArray(result?.notes)) {
+      alert('Notes are unavailable. Please confirm the server is updated.');
+    }
+  } catch (error) {
+    alert(error.message || 'Unable to load booking notes.');
+  } finally {
+    state.adminBookingNotesLoading = false;
+    renderBookingNotes();
+  }
+}
+
+async function addBookingNote() {
+  const bookingId = Number(elements.bookingNotesBookingId?.value || 0);
+  if (!bookingId) {
+    alert('Select a booking first.');
+    return;
+  }
+  const noteText = String(elements.bookingNotesInput?.value || '').trim();
+  if (!noteText) {
+    alert('Enter a note before saving.');
+    return;
+  }
+  try {
+    const result = await api('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingId, noteText }),
+    });
+    const note = result?.note;
+    if (!note?.id) {
+      alert('Unable to save this note right now.');
+      return;
+    }
+    state.adminBookingNotesByBooking = {
+      ...(state.adminBookingNotesByBooking || {}),
+      [String(bookingId)]: [note, ...getBookingNotes(bookingId)],
+    };
+    if (elements.bookingNotesInput) elements.bookingNotesInput.value = '';
+    renderBookingNotes();
+  } catch (error) {
+    alert(error.message || 'Unable to save this note right now.');
+  }
+}
+
+async function updateBookingNote(noteId) {
+  const edit = state.adminBookingNoteEdits?.[noteId];
+  const nextText = String(edit?.text || '').trim();
+  if (!nextText) {
+    alert('Note text cannot be empty.');
+    return;
+  }
+  try {
+    const result = await api(`/api/notes/${encodeURIComponent(noteId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noteText: nextText }),
+    });
+    const updated = result?.note;
+    if (!updated?.id) {
+      alert('Unable to update this note right now.');
+      return;
+    }
+    const bookingId = String(updated.bookingId || elements.bookingNotesBookingId?.value || '');
+    const notes = getBookingNotes(bookingId).map((note) =>
+      String(note.id) === String(updated.id) ? updated : note
+    );
+    state.adminBookingNotesByBooking = {
+      ...(state.adminBookingNotesByBooking || {}),
+      [bookingId]: notes,
+    };
+    if (state.adminBookingNoteEdits) {
+      delete state.adminBookingNoteEdits[noteId];
+    }
+    renderBookingNotes();
+  } catch (error) {
+    alert(error.message || 'Unable to update this note right now.');
+  }
+}
+
+async function deleteBookingNote(noteId) {
+  const ok = confirm('Delete this note?');
+  if (!ok) return;
+  try {
+    await api(`/api/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' });
+    const bookingId = String(elements.bookingNotesBookingId?.value || '');
+    const notes = getBookingNotes(bookingId).filter((note) => String(note.id) !== String(noteId));
+    state.adminBookingNotesByBooking = {
+      ...(state.adminBookingNotesByBooking || {}),
+      [bookingId]: notes,
+    };
+    if (state.adminBookingNoteEdits) {
+      delete state.adminBookingNoteEdits[noteId];
+    }
+    renderBookingNotes();
+  } catch (error) {
+    alert(error.message || 'Unable to delete this note right now.');
+  }
+}
+
+function renderBookingNotes() {
+  if (!elements.bookingNotesList || !elements.bookingNotesEmpty) return;
+  const bookingId = String(elements.bookingNotesBookingId?.value || '');
+  const notes = getBookingNotes(bookingId);
+  const isLoading = state.adminBookingNotesLoading;
+  elements.bookingNotesList.innerHTML = '';
+  elements.bookingNotesEmpty.textContent = isLoading ? 'Loading notes...' : 'No notes yet.';
+  elements.bookingNotesEmpty.hidden = isLoading ? false : notes.length > 0;
+
+  notes.forEach((note) => {
+    const card = document.createElement('article');
+    card.className = 'admin-note-card';
+    const createdAt = note.createdAt ? new Date(note.createdAt) : null;
+    const createdLabel = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : '-';
+    const edit = state.adminBookingNoteEdits?.[note.id] || null;
+    const isEditing = Boolean(edit);
+
+    if (isEditing) {
+      const meta = document.createElement('div');
+      meta.className = 'admin-note-meta';
+      meta.innerHTML = `<span>Created ${escapeHtml(createdLabel)}</span>`;
+      const textarea = document.createElement('textarea');
+      textarea.className = 'admin-note-edit';
+      textarea.rows = 3;
+      textarea.value = edit.text || '';
+      const actions = document.createElement('div');
+      actions.className = 'admin-note-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-primary';
+      saveBtn.type = 'button';
+      saveBtn.textContent = 'Save';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-secondary';
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = 'Cancel';
+      actions.append(saveBtn, cancelBtn);
+      card.append(meta, textarea, actions);
+      textarea.addEventListener('input', (event) => {
+        state.adminBookingNoteEdits[note.id] = { text: event.target.value };
+      });
+      saveBtn.addEventListener('click', () => updateBookingNote(note.id));
+      cancelBtn.addEventListener('click', () => {
+        delete state.adminBookingNoteEdits[note.id];
+        renderBookingNotes();
+      });
+    } else {
+      card.innerHTML = `
+        <div class="admin-note-meta">
+          <span>Created ${escapeHtml(createdLabel)}</span>
+        </div>
+        <p>${escapeHtml(note.noteText || '')}</p>
+        <div class="admin-note-actions">
+          <button class="btn btn-secondary" type="button">Edit</button>
+          <button class="btn btn-danger" type="button">Delete</button>
+        </div>
+      `;
+      const [editBtn, deleteBtn] = card.querySelectorAll('button');
+      editBtn?.addEventListener('click', () => {
+        state.adminBookingNoteEdits[note.id] = { text: note.noteText || '' };
+        renderBookingNotes();
+      });
+      deleteBtn?.addEventListener('click', () => deleteBookingNote(note.id));
+    }
+
+    elements.bookingNotesList.appendChild(card);
+  });
 }
 
 async function saveSingleSessionServiceBooking(serviceName) {
@@ -2689,6 +2938,7 @@ function renderServices() {
       state.selectedServiceDate = dateInput.value || getTodayIsoDate();
       state.slotAvailability = {};
       state.slotAvailabilityLoading = true;
+      state.slotAutoShiftedNotice = '';
       renderServices();
       loadServiceAvailability();
     });
@@ -2744,12 +2994,20 @@ function renderServices() {
     slotsTitle.className = 'service-slots-title';
     slotsTitle.textContent = state.slotAvailabilityLoading ? 'Loading slots...' : 'Available time slots';
     slotsWrap.appendChild(slotsTitle);
+    if (state.slotAutoShiftedNotice) {
+      const notice = document.createElement('p');
+      notice.className = 'slot-auto-notice';
+      notice.textContent = state.slotAutoShiftedNotice;
+      slotsWrap.appendChild(notice);
+    }
 
     const slotGrid = document.createElement('div');
     slotGrid.className = 'service-slot-grid';
     const serviceAvailability = state.slotAvailability[service.name] || {};
+    const serviceHolds = state.slotHoldCounts[service.name] || {};
     for (const slot of SLOT_OPTIONS) {
       const booked = Number(serviceAvailability[slot.value] || 0);
+      const holdCount = Number(serviceHolds[slot.value] || 0);
       const capacity = Number(state.slotCapacityByService[service.name] || 8);
       const isPastSlot = isBookingSlotInPast(state.selectedServiceDate, slot.value);
       const slotRow = document.createElement('div');
@@ -2761,14 +3019,24 @@ function renderServices() {
       seatWrap.className = 'slot-seat-grid';
       for (let seatIndex = 0; seatIndex < capacity; seatIndex += 1) {
         const seatBooked = seatIndex < booked;
+        const seatHold = !seatBooked && seatIndex < booked + holdCount;
         const seatBtn = document.createElement('button');
         seatBtn.type = 'button';
-        seatBtn.className = `slot-seat-box${seatBooked ? ' is-booked' : ' is-available'}`;
-        seatBtn.disabled = seatBooked || isPastSlot || state.slotAvailabilityLoading;
-        seatBtn.title = seatBooked ? 'Booked' : isPastSlot ? 'Unavailable' : `Book ${slot.label}`;
+        seatBtn.className = `slot-seat-box${seatBooked ? ' is-booked' : seatHold ? ' is-hold' : ' is-available'}`;
+        seatBtn.disabled = seatBooked || seatHold || isPastSlot || state.slotAvailabilityLoading;
+        const holdMinutes = Number(state.bookingHoldMinutes || BOOKING_HOLD_MINUTES) || BOOKING_HOLD_MINUTES;
+        seatBtn.title = seatBooked
+          ? 'Booked'
+          : seatHold
+            ? `On hold (${holdMinutes} min)`
+            : isPastSlot
+              ? 'Unavailable'
+              : `Book ${slot.label}`;
         seatBtn.setAttribute(
           'aria-label',
-          `${slot.label} seat ${seatIndex + 1} ${seatBooked ? 'booked' : isPastSlot ? 'unavailable' : 'available'}`
+          `${slot.label} seat ${seatIndex + 1} ${
+            seatBooked ? 'booked' : seatHold ? 'on hold' : isPastSlot ? 'unavailable' : 'available'
+          }`
         );
         seatBtn.addEventListener('click', () => {
           openDialog();
@@ -2780,12 +3048,22 @@ function renderServices() {
         });
         seatWrap.appendChild(seatBtn);
       }
+      const slotMetaWrap = document.createElement('div');
+      slotMetaWrap.className = 'slot-meta-wrap';
       const slotMeta = document.createElement('span');
       slotMeta.className = 'slot-meta';
       slotMeta.textContent = `${booked}/${capacity}`;
+      slotMetaWrap.appendChild(slotMeta);
+      if (holdCount > 0) {
+        const holdNote = document.createElement('span');
+        holdNote.className = 'slot-hold-note';
+        const holdMinutes = Number(state.bookingHoldMinutes || BOOKING_HOLD_MINUTES) || BOOKING_HOLD_MINUTES;
+        holdNote.textContent = `On hold: ${holdCount} • try again in ${holdMinutes} min`;
+        slotMetaWrap.appendChild(holdNote);
+      }
       slotRow.appendChild(slotTime);
       slotRow.appendChild(seatWrap);
-      slotRow.appendChild(slotMeta);
+      slotRow.appendChild(slotMetaWrap);
       slotGrid.appendChild(slotRow);
     }
     slotsWrap.appendChild(slotGrid);
@@ -2842,6 +3120,15 @@ function getTodayIsoDate() {
   return `${year}-${month}-${day}`;
 }
 
+function getTomorrowIsoDate() {
+  const now = new Date();
+  now.setDate(now.getDate() + 1);
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function isBookingSlotInPast(bookingDate, bookingTime) {
   const normalizedDate = String(bookingDate || '').trim();
   const normalizedTime = String(bookingTime || '').trim();
@@ -2883,11 +3170,107 @@ function renderMembership() {
     null;
   const activePlanName = activePlan?.name || current.plan || 'Membership';
   const effectiveExpiry = getEffectiveMembershipExpiryDate(current.startedAt, current.expiresAt);
-  elements.membershipStatusText.textContent = active
-    ? `Active plan: ${activePlanName}${currentPeopleCount > 0 ? ` • ${currentPeopleCount} member${currentPeopleCount > 1 ? 's' : ''}` : ''}${
-        effectiveExpiry ? ` (valid till ${effectiveExpiry.toLocaleDateString()})` : ''
-      }`
-    : 'No active membership';
+  if (elements.membershipStatusText) {
+    elements.membershipStatusText.textContent = active ? '' : 'No active membership';
+    elements.membershipStatusText.hidden = active;
+  }
+
+  if (elements.membershipActivePanel && elements.membershipBrowsePanel) {
+    elements.membershipActivePanel.hidden = !active;
+    elements.membershipBrowsePanel.hidden = active;
+  }
+
+  if (active) {
+    if (elements.membershipActiveTitle) {
+      elements.membershipActiveTitle.textContent = activePlanName;
+    }
+    if (elements.membershipActiveMeta) {
+      const metaParts = [];
+      if (currentPeopleCount > 0) {
+        metaParts.push(`${currentPeopleCount} member${currentPeopleCount > 1 ? 's' : ''} covered`);
+      }
+      if (effectiveExpiry) {
+        metaParts.push(`Valid till ${effectiveExpiry.toLocaleDateString()}`);
+      }
+      elements.membershipActiveMeta.textContent = metaParts.join(' • ');
+    }
+    if (elements.membershipActiveSessions) {
+      const sessions = Number(activePlan?.h2SessionsIncluded || current.h2SessionsIncluded || 0);
+      elements.membershipActiveSessions.textContent = Number.isFinite(sessions) ? String(sessions) : '0';
+    }
+    if (elements.membershipActiveMembers) {
+      elements.membershipActiveMembers.textContent = currentPeopleCount ? String(currentPeopleCount) : '1';
+    }
+    if (elements.membershipActiveValidTill) {
+      elements.membershipActiveValidTill.textContent = effectiveExpiry
+        ? effectiveExpiry.toLocaleDateString()
+        : '-';
+    }
+
+    if (elements.membershipSnippetList) {
+      const rows = buildUserBookingRows(state.bookings || [], state.bookings || []);
+      const snippets = rows
+        .filter((row) => String(row.status || '').toLowerCase() !== 'cancelled')
+        .map((row) => {
+          if (row.isGroupedHydrogen) {
+            const entries = Array.isArray(row.hydrogenEntries) ? row.hydrogenEntries : [];
+            const nextEntry = entries.find(
+              (entry) => !isBookingSlotInPast(entry.bookingDate, entry.bookingTime)
+            ) || entries[0];
+            if (!nextEntry) return null;
+            return {
+              title: row.serviceTitle,
+              time: formatDateTime(nextEntry.bookingDate, nextEntry.bookingTime),
+              sortKey: `${nextEntry.bookingDate}T${nextEntry.bookingTime}`,
+              meta: `${entries.length} sessions`,
+              status: row.status,
+            };
+          }
+          const booking = row.booking;
+          if (!booking || isBookingSlotInPast(booking.bookingDate, booking.bookingTime)) return null;
+          return {
+            title: row.serviceTitle,
+            time: formatDateTime(booking.bookingDate, booking.bookingTime),
+            sortKey: `${booking.bookingDate}T${booking.bookingTime}`,
+            meta: row.serviceMetaLines?.[0] || '',
+            status: row.status,
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+        .slice(0, 3);
+
+      elements.membershipSnippetList.innerHTML = '';
+      if (!snippets.length) {
+        const empty = document.createElement('p');
+        empty.className = 'membership-copy membership-snippet-empty';
+        empty.textContent = 'No sessions booked yet. Head to Services to book your first session.';
+        elements.membershipSnippetList.appendChild(empty);
+      } else {
+        snippets.forEach((snippet) => {
+          const card = document.createElement('article');
+          card.className = 'membership-snippet';
+          card.innerHTML = `
+            <div class="membership-snippet-main">
+              <h5>${escapeHtml(snippet.title)}</h5>
+              <p>${escapeHtml(snippet.time)}</p>
+            </div>
+            <div class="membership-snippet-meta">
+              ${snippet.meta ? `<span>${escapeHtml(snippet.meta)}</span>` : ''}
+              <span class="status-chip">${escapeHtml(String(snippet.status || 'scheduled'))}</span>
+            </div>
+          `;
+          elements.membershipSnippetList.appendChild(card);
+        });
+      }
+    }
+
+    if (elements.membershipSnippetCount) {
+      const count = elements.membershipSnippetList?.querySelectorAll('.membership-snippet').length || 0;
+      elements.membershipSnippetCount.textContent = count ? `${count} upcoming` : '';
+    }
+    return;
+  }
 
   const orderedPlanIds = ['h2_single', 'h2_two', 'h2_four'];
   const plans = orderedPlanIds
@@ -3681,6 +4064,7 @@ function renderAdminRows(bookings) {
       createActionButton('Complete', () => changeStatus(booking.id, 'completed')),
       createActionButton('Cancel', () => changeStatus(booking.id, 'cancelled'))
     );
+    actions.append(createActionButton('Notes', () => openBookingNotesDialog(booking.id)));
 
     actionCell.appendChild(actions);
     tr.appendChild(actionCell);
@@ -4770,9 +5154,23 @@ async function api(url, options = {}) {
     ...options,
   });
 
-  const data = await response.json();
+  if (response.status === 204) {
+    return null;
+  }
+
+  let data = null;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+  }
+
   if (!response.ok) {
-    throw new Error(data.message || 'Request failed');
+    const message = data?.message || 'Request failed';
+    throw new Error(message);
   }
 
   return data;

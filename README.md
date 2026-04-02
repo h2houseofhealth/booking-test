@@ -115,7 +115,7 @@ Open `http://localhost:3000`
 - Double-booking prevention:
   same service + date + slot cannot be booked if another active booking exists (`pending`, `booked`, `confirmed`).
 - Slot duration:
-  1.5 hours per slot (first slot `9:30 AM - 11:00 AM`, last slot `7:30 PM - 9:00 PM`).
+  1 hour per slot (first slot `9:30 AM - 10:30 AM`, last slot `7:30 PM - 8:30 PM`).
 - Add-on rule:
   only one IV add-on (IV Therapy or IV Shot) is allowed per user in the same slot; additional add-ons are handled by admin after consultation.
 - Only approved doctors are visible in user booking flow.

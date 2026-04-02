@@ -14,7 +14,6 @@
     <main class="portal">
       <header class="portal-header">
         <div class="brand-lockup">
-          <img class="brand-logo" src="assets/brand/H2_Logo.png" alt="H2 House of Health" />
           <h1 class="sr-only">H2 House of Health Patient Booking Portal</h1>
         </div>
         <div class="top-actions" id="appArea" hidden>
@@ -131,34 +130,64 @@
           </div>
           <p id="membershipStatusText" class="membership-status"></p>
         </div>
-        <section class="membership-hero" aria-label="Membership Highlights">
-          <div class="membership-hero-copy">
-            <span class="membership-hero-kicker">Wellness Access</span>
-            <h3>Structured membership plans built around hydrogen therapy, diagnostics, and long-term care.</h3>
-            <p class="membership-copy">
-              Choose the membership that fits your life. Every plan includes hydrogen access, diagnostics support,
-              and member-only wellness benefits across the 90-day membership period.
-            </p>
+        <section id="membershipActivePanel" class="membership-active-panel" hidden>
+          <div class="membership-active-header">
+            <div>
+              <span class="membership-hero-kicker">Your Membership</span>
+              <h3 id="membershipActiveTitle">Active Plan</h3>
+              <p id="membershipActiveMeta" class="membership-copy"></p>
+            </div>
+            <div class="membership-active-stats">
+              <div class="membership-active-stat">
+                <strong id="membershipActiveSessions">0</strong>
+                <span>H2 sessions</span>
+              </div>
+              <div class="membership-active-stat">
+                <strong id="membershipActiveMembers">0</strong>
+                <span>members covered</span>
+              </div>
+              <div class="membership-active-stat">
+                <strong id="membershipActiveValidTill">-</strong>
+                <span>valid till</span>
+              </div>
+            </div>
           </div>
-          <div class="membership-hero-panel">
-            <div class="membership-hero-stat">
-              <strong>H2 Sessions</strong>
-              <span>Included in every 3-month plan</span>
-            </div>
-            <div class="membership-hero-stat">
-              <strong>Diagnostics</strong>
-              <span>Lab tests, oxidative stress markers, and radiology support</span>
-            </div>
-            <div class="membership-hero-stat">
-              <strong>Member Value</strong>
-              <span>Lower hydrogen prices and exclusive services</span>
-            </div>
+          <div class="membership-snippet-head">
+            <h4>Upcoming sessions</h4>
+            <span id="membershipSnippetCount" class="membership-snippet-count"></span>
           </div>
+          <div id="membershipSnippetList" class="membership-snippet-list"></div>
         </section>
-        <div id="membershipPlans" class="membership-grid"></div>
-        <div class="dialog-actions">
-          <button id="membershipBackBtn" class="btn btn-secondary" type="button">Back</button>
-          <button id="membershipNextBtn" class="btn btn-primary" type="button">Next</button>
+        <div id="membershipBrowsePanel">
+          <section class="membership-hero" aria-label="Membership Highlights">
+            <div class="membership-hero-copy">
+              <span class="membership-hero-kicker">Wellness Access</span>
+              <h3>Structured membership plans built around hydrogen therapy, diagnostics, and long-term care.</h3>
+              <p class="membership-copy">
+                Choose the membership that fits your life. Every plan includes hydrogen access, diagnostics support,
+                and member-only wellness benefits across the 90-day membership period.
+              </p>
+            </div>
+            <div class="membership-hero-panel">
+              <div class="membership-hero-stat">
+                <strong>H2 Sessions</strong>
+                <span>Included in every 3-month plan</span>
+              </div>
+              <div class="membership-hero-stat">
+                <strong>Diagnostics</strong>
+                <span>Lab tests, oxidative stress markers, and radiology support</span>
+              </div>
+              <div class="membership-hero-stat">
+                <strong>Member Value</strong>
+                <span>Lower hydrogen prices and exclusive services</span>
+              </div>
+            </div>
+          </section>
+          <div id="membershipPlans" class="membership-grid"></div>
+          <div class="dialog-actions">
+            <button id="membershipBackBtn" class="btn btn-secondary" type="button">Back</button>
+            <button id="membershipNextBtn" class="btn btn-primary" type="button">Next</button>
+          </div>
         </div>
       </section>
 
@@ -504,7 +533,32 @@
       </form>
     </dialog>
 
+    <dialog id="bookingNotesDialog" class="booking-dialog">
+      <form method="dialog">
+        <div class="dialog-head">
+          <h2>Booking Notes</h2>
+          <button id="bookingNotesCloseBtn" class="icon-btn" type="button" aria-label="Close">×</button>
+        </div>
+
+        <input id="bookingNotesBookingId" type="hidden" />
+
+        <div class="form-grid">
+          <label class="full-width">
+            Add Note
+            <textarea id="bookingNotesInput" rows="3" placeholder="Write a note for this booking..."></textarea>
+          </label>
+        </div>
+
+        <div class="dialog-actions">
+          <button id="bookingNotesAddBtn" class="btn btn-primary" type="button">Add Note</button>
+        </div>
+
+        <div id="bookingNotesList" class="admin-notes-modal-list"></div>
+        <p id="bookingNotesEmpty" class="empty-state" hidden>No notes yet.</p>
+      </form>
+    </dialog>
+
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=4"></script>
   </body>
 </html>

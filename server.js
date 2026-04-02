@@ -295,13 +295,16 @@ const MEMBERSHIP_PLANS = [
   },
 ];
 const MEMBERSHIP_VALIDITY_DAYS = Number(MEMBERSHIP_PLANS.find((plan) => plan.id === 'h2_single')?.validityDays || 90);
-
 const app = express();
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "*");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  next();
+});
+app.use(express.json());
 const cors = require("cors");
-app.use(cors({
-  origin: "*",
-  credentials: false,
-}));
+app.use(cors());
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const uploadsDir = path.resolve(process.env.UPLOADS_DIR || path.join(__dirname, 'uploads'));
 const dbPath = path.join(dataDir, 'booking.db');
@@ -1619,6 +1622,100 @@ app.post('/api/admin/services', requireAuth, requireAdmin, (req, res) => {
       membershipPeopleCount: resolvedCustomer.user.membershipPeopleCount ?? null,
     },
   });
+});
+
+app.get('/api/bookings/:bookingId/notes', requireAuth, requireAdmin, (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isInteger(bookingId)) {
+    return res.status(400).json({ message: 'invalid booking id' });
+  }
+  const booking = db.prepare('SELECT id FROM bookings WHERE id = ?').get(bookingId);
+  if (!booking) {
+    return res.status(404).json({ message: 'booking not found' });
+  }
+  const notes = db
+    .prepare(
+      `SELECT id, booking_id AS bookingId, note_text AS noteText,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM notes
+       WHERE booking_id = ?
+       ORDER BY created_at DESC`
+    )
+    .all(bookingId);
+  return res.json({ notes });
+});
+
+app.post('/api/notes', requireAuth, requireAdmin, (req, res) => {
+  const bookingId = Number(req.body?.bookingId || req.body?.booking_id || 0);
+  const noteText = String(req.body?.noteText || req.body?.note_text || '').trim();
+
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return res.status(400).json({ message: 'bookingId is required' });
+  }
+  if (!noteText) {
+    return res.status(400).json({ message: 'noteText is required' });
+  }
+  const booking = db.prepare('SELECT id FROM bookings WHERE id = ?').get(bookingId);
+  if (!booking) {
+    return res.status(404).json({ message: 'booking not found' });
+  }
+
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO notes (booking_id, note_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?)`
+    )
+    .run(bookingId, noteText, now, now);
+  const note = db
+    .prepare(
+      `SELECT id, booking_id AS bookingId, note_text AS noteText,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM notes
+       WHERE id = ?`
+    )
+    .get(result.lastInsertRowid);
+  return res.json({ note });
+});
+
+app.put('/api/notes/:id', requireAuth, requireAdmin, (req, res) => {
+  const noteId = Number(req.params.id);
+  const noteText = String(req.body?.noteText || req.body?.note_text || '').trim();
+  if (!Number.isInteger(noteId)) {
+    return res.status(400).json({ message: 'invalid note id' });
+  }
+  if (!noteText) {
+    return res.status(400).json({ message: 'noteText is required' });
+  }
+  const existing = db.prepare('SELECT id FROM notes WHERE id = ?').get(noteId);
+  if (!existing) {
+    return res.status(404).json({ message: 'note not found' });
+  }
+
+  const now = new Date().toISOString();
+  db.prepare('UPDATE notes SET note_text = ?, updated_at = ? WHERE id = ?').run(noteText, now, noteId);
+  const note = db
+    .prepare(
+      `SELECT id, booking_id AS bookingId, note_text AS noteText,
+              created_at AS createdAt, updated_at AS updatedAt
+       FROM notes
+       WHERE id = ?`
+    )
+    .get(noteId);
+  return res.json({ note });
+});
+
+app.delete('/api/notes/:id', requireAuth, requireAdmin, (req, res) => {
+  const noteId = Number(req.params.id);
+  if (!Number.isInteger(noteId)) {
+    return res.status(400).json({ message: 'invalid note id' });
+  }
+  const existing = db.prepare('SELECT id FROM notes WHERE id = ?').get(noteId);
+  if (!existing) {
+    return res.status(404).json({ message: 'note not found' });
+  }
+  db.prepare('DELETE FROM notes WHERE id = ?').run(noteId);
+  return res.status(204).send();
 });
 
 app.get('/api/admin/membership-orders', requireAuth, requireAdmin, (_req, res) => {
@@ -4212,15 +4309,14 @@ app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on port ${PORT}`);
   if (SENDGRID_API_KEY && SENDGRID_FROM_EMAIL) {
     console.log(`SendGrid OTP mailer configured with sender ${SENDGRID_FROM_EMAIL}`);
   } else {
     console.warn('SendGrid OTP mailer is not fully configured. Check SENDGRID_API_KEY and SENDGRID_FROM_EMAIL.');
   }
 });
-
 function canAccessBooking(user, ownerId) {
   return user.role === 'admin' || user.id === Number(ownerId);
 }
@@ -5677,7 +5773,7 @@ function validateBookingPayload(body, user) {
   }
 
   if (!ALLOWED_SLOT_START_TIMES.includes(bookingTime)) {
-    return { error: 'bookingTime must be one of the allowed 1.5-hour slots' };
+    return { error: 'bookingTime must be one of the allowed 1-hour slots' };
   }
 
   if (isBookingSlotInPast(bookingDate, bookingTime)) {
@@ -6545,10 +6641,20 @@ function migrate() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+      note_text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_bookings_user_date
       ON bookings(user_id, booking_date, booking_time);
     CREATE INDEX IF NOT EXISTS idx_admin_discount_phones_phone_key
       ON admin_discount_phones(phone_key);
+    CREATE INDEX IF NOT EXISTS idx_notes_booking
+      ON notes(booking_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_membership_subscription_members_email
       ON membership_subscription_members(email);
     CREATE INDEX IF NOT EXISTS idx_membership_subscriptions_owner
@@ -6557,6 +6663,22 @@ function migrate() {
 
   if (!hasColumn('users', 'role')) {
     db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+  }
+
+  if (hasTable('notes') && !hasColumn('notes', 'booking_id')) {
+    db.exec('DROP TABLE notes');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+        note_text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notes_booking
+        ON notes(booking_id, created_at);
+    `);
   }
 
   if (!hasColumn('users', 'age')) {
