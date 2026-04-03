@@ -147,15 +147,20 @@ const elements = {
   membershipPlans: document.getElementById('membershipPlans'),
   membershipStatusText: document.getElementById('membershipStatusText'),
   memberFlowLabel: document.getElementById('memberFlowLabel'),
-  membershipActivePanel: document.getElementById('membershipActivePanel'),
   membershipBrowsePanel: document.getElementById('membershipBrowsePanel'),
-  membershipActiveTitle: document.getElementById('membershipActiveTitle'),
-  membershipActiveMeta: document.getElementById('membershipActiveMeta'),
-  membershipActiveSessions: document.getElementById('membershipActiveSessions'),
-  membershipActiveMembers: document.getElementById('membershipActiveMembers'),
-  membershipActiveValidTill: document.getElementById('membershipActiveValidTill'),
-  membershipSnippetList: document.getElementById('membershipSnippetList'),
-  membershipSnippetCount: document.getElementById('membershipSnippetCount'),
+  membershipDashboard: document.getElementById('membershipDashboard'),
+  membershipWelcomeName: document.getElementById('membershipWelcomeName'),
+  membershipDashboardStatus: document.getElementById('membershipDashboardStatus'),
+  membershipStatSessions: document.getElementById('membershipStatSessions'),
+  membershipStatMembers: document.getElementById('membershipStatMembers'),
+  membershipStatValid: document.getElementById('membershipStatValid'),
+  membershipUsageLabel: document.getElementById('membershipUsageLabel'),
+  membershipUsageBar: document.getElementById('membershipUsageBar'),
+  membershipUsageNote: document.getElementById('membershipUsageNote'),
+  membershipNextSessionTitle: document.getElementById('membershipNextSessionTitle'),
+  membershipNextSessionMeta: document.getElementById('membershipNextSessionMeta'),
+  membershipQuickBookBtn: document.getElementById('membershipQuickBookBtn'),
+  membershipQuickHistoryBtn: document.getElementById('membershipQuickHistoryBtn'),
   membershipBackBtn: document.getElementById('membershipBackBtn'),
   membershipNextBtn: document.getElementById('membershipNextBtn'),
   bookingNotesDialog: document.getElementById('bookingNotesDialog'),
@@ -468,6 +473,22 @@ function attachEvents() {
     render();
     requestAnimationFrame(() => {
       elements.servicesSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+  elements.membershipQuickBookBtn?.addEventListener('click', () => {
+    resetServiceBrowserState();
+    state.activeUserTab = 'services';
+    render();
+    requestAnimationFrame(() => {
+      elements.servicesSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+  elements.membershipQuickHistoryBtn?.addEventListener('click', () => {
+    resetServiceBrowserState();
+    state.activeUserTab = 'bookings';
+    render();
+    requestAnimationFrame(() => {
+      elements.userBookingsSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });
   elements.servicesBackBtn?.addEventListener('click', () => {
@@ -3175,101 +3196,70 @@ function renderMembership() {
     elements.membershipStatusText.hidden = active;
   }
 
-  if (elements.membershipActivePanel && elements.membershipBrowsePanel) {
-    elements.membershipActivePanel.hidden = !active;
+  if (elements.membershipBrowsePanel) {
     elements.membershipBrowsePanel.hidden = active;
   }
 
-  if (active) {
-    if (elements.membershipActiveTitle) {
-      elements.membershipActiveTitle.textContent = activePlanName;
-    }
-    if (elements.membershipActiveMeta) {
-      const metaParts = [];
-      if (currentPeopleCount > 0) {
-        metaParts.push(`${currentPeopleCount} member${currentPeopleCount > 1 ? 's' : ''} covered`);
-      }
-      if (effectiveExpiry) {
-        metaParts.push(`Valid till ${effectiveExpiry.toLocaleDateString()}`);
-      }
-      elements.membershipActiveMeta.textContent = metaParts.join(' • ');
-    }
-    if (elements.membershipActiveSessions) {
-      const sessions = Number(activePlan?.h2SessionsIncluded || current.h2SessionsIncluded || 0);
-      elements.membershipActiveSessions.textContent = Number.isFinite(sessions) ? String(sessions) : '0';
-    }
-    if (elements.membershipActiveMembers) {
-      elements.membershipActiveMembers.textContent = currentPeopleCount ? String(currentPeopleCount) : '1';
-    }
-    if (elements.membershipActiveValidTill) {
-      elements.membershipActiveValidTill.textContent = effectiveExpiry
-        ? effectiveExpiry.toLocaleDateString()
-        : '-';
-    }
+  if (elements.membershipDashboard) {
+    elements.membershipDashboard.hidden = false;
+  }
 
-    if (elements.membershipSnippetList) {
-      const rows = buildUserBookingRows(state.bookings || [], state.bookings || []);
-      const snippets = rows
-        .filter((row) => String(row.status || '').toLowerCase() !== 'cancelled')
-        .map((row) => {
-          if (row.isGroupedHydrogen) {
-            const entries = Array.isArray(row.hydrogenEntries) ? row.hydrogenEntries : [];
-            const nextEntry = entries.find(
-              (entry) => !isBookingSlotInPast(entry.bookingDate, entry.bookingTime)
-            ) || entries[0];
-            if (!nextEntry) return null;
-            return {
-              title: row.serviceTitle,
-              time: formatDateTime(nextEntry.bookingDate, nextEntry.bookingTime),
-              sortKey: `${nextEntry.bookingDate}T${nextEntry.bookingTime}`,
-              meta: `${entries.length} sessions`,
-              status: row.status,
-            };
-          }
-          const booking = row.booking;
-          if (!booking || isBookingSlotInPast(booking.bookingDate, booking.bookingTime)) return null;
-          return {
-            title: row.serviceTitle,
-            time: formatDateTime(booking.bookingDate, booking.bookingTime),
-            sortKey: `${booking.bookingDate}T${booking.bookingTime}`,
-            meta: row.serviceMetaLines?.[0] || '',
-            status: row.status,
-          };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-        .slice(0, 3);
+  const firstName = String(state.user?.name || 'Member').trim().split(/\s+/)[0] || 'Member';
+  if (elements.membershipWelcomeName) {
+    elements.membershipWelcomeName.textContent = `Welcome, ${firstName}`;
+  }
+  if (elements.membershipDashboardStatus) {
+    elements.membershipDashboardStatus.textContent = active
+      ? `${activePlanName}${effectiveExpiry ? ` • valid till ${effectiveExpiry.toLocaleDateString()}` : ''}`
+      : 'Activate a membership to unlock member pricing and benefits.';
+  }
 
-      elements.membershipSnippetList.innerHTML = '';
-      if (!snippets.length) {
-        const empty = document.createElement('p');
-        empty.className = 'membership-copy membership-snippet-empty';
-        empty.textContent = 'No sessions booked yet. Head to Services to book your first session.';
-        elements.membershipSnippetList.appendChild(empty);
-      } else {
-        snippets.forEach((snippet) => {
-          const card = document.createElement('article');
-          card.className = 'membership-snippet';
-          card.innerHTML = `
-            <div class="membership-snippet-main">
-              <h5>${escapeHtml(snippet.title)}</h5>
-              <p>${escapeHtml(snippet.time)}</p>
-            </div>
-            <div class="membership-snippet-meta">
-              ${snippet.meta ? `<span>${escapeHtml(snippet.meta)}</span>` : ''}
-              <span class="status-chip">${escapeHtml(String(snippet.status || 'scheduled'))}</span>
-            </div>
-          `;
-          elements.membershipSnippetList.appendChild(card);
-        });
-      }
-    }
+  if (elements.membershipStatSessions) {
+    const sessions = Number(activePlan?.h2SessionsIncluded || current.h2SessionsIncluded || 0);
+    elements.membershipStatSessions.textContent = Number.isFinite(sessions) ? String(sessions) : '0';
+  }
+  if (elements.membershipStatMembers) {
+    elements.membershipStatMembers.textContent = currentPeopleCount ? String(currentPeopleCount) : '0';
+  }
+  if (elements.membershipStatValid) {
+    elements.membershipStatValid.textContent = effectiveExpiry ? effectiveExpiry.toLocaleDateString() : '-';
+  }
 
-    if (elements.membershipSnippetCount) {
-      const count = elements.membershipSnippetList?.querySelectorAll('.membership-snippet').length || 0;
-      elements.membershipSnippetCount.textContent = count ? `${count} upcoming` : '';
-    }
-    return;
+  const hydrogenSessions = (state.bookings || []).filter(
+    (booking) =>
+      getBookingCategory(booking.serviceName) === 'HYDROGEN SESSION' &&
+      String(booking.status || '').toLowerCase() !== 'cancelled'
+  );
+  const totalSessions = Number(activePlan?.h2SessionsIncluded || 0);
+  const usedSessions = active ? hydrogenSessions.length : 0;
+  const remainingSessions = totalSessions > 0 ? Math.max(0, totalSessions - usedSessions) : 0;
+  const usagePercent = totalSessions > 0 ? Math.min(100, Math.round((usedSessions / totalSessions) * 100)) : 0;
+
+  if (elements.membershipUsageLabel) {
+    elements.membershipUsageLabel.textContent = totalSessions
+      ? `${usedSessions} of ${totalSessions} used`
+      : '0 of 0 used';
+  }
+  if (elements.membershipUsageBar) {
+    elements.membershipUsageBar.style.width = `${usagePercent}%`;
+  }
+  if (elements.membershipUsageNote) {
+    elements.membershipUsageNote.textContent = active
+      ? `${remainingSessions} sessions remaining`
+      : 'Start a membership to begin tracking sessions.';
+  }
+
+  const upcoming = hydrogenSessions
+    .filter((booking) => !isBookingSlotInPast(booking.bookingDate, booking.bookingTime))
+    .sort((a, b) => `${a.bookingDate}T${a.bookingTime}`.localeCompare(`${b.bookingDate}T${b.bookingTime}`))[0];
+
+  if (elements.membershipNextSessionTitle) {
+    elements.membershipNextSessionTitle.textContent = upcoming ? 'Hydrogen Session' : 'No sessions scheduled';
+  }
+  if (elements.membershipNextSessionMeta) {
+    elements.membershipNextSessionMeta.textContent = upcoming
+      ? formatDateTime(upcoming.bookingDate, upcoming.bookingTime)
+      : 'Book your next session to keep momentum.';
   }
 
   const orderedPlanIds = ['h2_single', 'h2_two', 'h2_four'];

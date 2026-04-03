@@ -130,33 +130,55 @@
           </div>
           <p id="membershipStatusText" class="membership-status"></p>
         </div>
-        <section id="membershipActivePanel" class="membership-active-panel" hidden>
-          <div class="membership-active-header">
+        <section id="membershipDashboard" class="membership-dashboard">
+          <div class="membership-dashboard-head">
             <div>
-              <span class="membership-hero-kicker">Your Membership</span>
-              <h3 id="membershipActiveTitle">Active Plan</h3>
-              <p id="membershipActiveMeta" class="membership-copy"></p>
+              <span class="membership-dashboard-kicker">Welcome back</span>
+              <h3 id="membershipWelcomeName">Member</h3>
+              <p id="membershipDashboardStatus" class="membership-copy"></p>
             </div>
-            <div class="membership-active-stats">
-              <div class="membership-active-stat">
-                <strong id="membershipActiveSessions">0</strong>
-                <span>H2 sessions</span>
-              </div>
-              <div class="membership-active-stat">
-                <strong id="membershipActiveMembers">0</strong>
-                <span>members covered</span>
-              </div>
-              <div class="membership-active-stat">
-                <strong id="membershipActiveValidTill">-</strong>
-                <span>valid till</span>
-              </div>
+            <div class="membership-quick-actions">
+              <button id="membershipQuickBookBtn" class="btn btn-primary" type="button">Book Session</button>
+              <button id="membershipQuickHistoryBtn" class="btn btn-secondary" type="button">View History</button>
             </div>
           </div>
-          <div class="membership-snippet-head">
-            <h4>Upcoming sessions</h4>
-            <span id="membershipSnippetCount" class="membership-snippet-count"></span>
+          <div class="membership-stat-grid">
+            <button class="membership-stat-card" type="button">
+              <span class="stat-icon">◎</span>
+              <span class="stat-label">Sessions</span>
+              <strong id="membershipStatSessions">0</strong>
+              <small>Included</small>
+            </button>
+            <button class="membership-stat-card" type="button">
+              <span class="stat-icon">◉</span>
+              <span class="stat-label">Members</span>
+              <strong id="membershipStatMembers">0</strong>
+              <small>Covered</small>
+            </button>
+            <button class="membership-stat-card" type="button">
+              <span class="stat-icon">◑</span>
+              <span class="stat-label">Valid Till</span>
+              <strong id="membershipStatValid">-</strong>
+              <small>Plan end</small>
+            </button>
           </div>
-          <div id="membershipSnippetList" class="membership-snippet-list"></div>
+          <div class="membership-dashboard-row">
+            <div class="membership-progress-card">
+              <div class="membership-progress-head">
+                <h4>Session Usage</h4>
+                <span id="membershipUsageLabel">0 of 0 used</span>
+              </div>
+              <div class="membership-progress-bar">
+                <span id="membershipUsageBar"></span>
+              </div>
+              <p id="membershipUsageNote" class="membership-copy"></p>
+            </div>
+            <div class="membership-highlight-card">
+              <span class="membership-highlight-kicker">Upcoming</span>
+              <h4 id="membershipNextSessionTitle">No sessions scheduled</h4>
+              <p id="membershipNextSessionMeta" class="membership-copy"></p>
+            </div>
+          </div>
         </section>
         <div id="membershipBrowsePanel">
           <section class="membership-hero" aria-label="Membership Highlights">
@@ -542,14 +564,9 @@
 
         <input id="bookingNotesBookingId" type="hidden" />
 
-        <div class="form-grid">
-          <label class="full-width">
-            Add Note
-            <textarea id="bookingNotesInput" rows="3" placeholder="Write a note for this booking..."></textarea>
-          </label>
-        </div>
-
-        <div class="dialog-actions">
+        <div class="note-input-container">
+          <label for="bookingNotesInput">Add Note</label>
+          <textarea id="bookingNotesInput" placeholder="Write a note for this booking..."></textarea>
           <button id="bookingNotesAddBtn" class="btn btn-primary" type="button">Add Note</button>
         </div>
 
