@@ -7,6 +7,7 @@ const state = {
   adminDiscountPhones: [],
   adminUsers: [],
   adminCoupons: [],
+  adminSelectedUserId: null,
   adminResolvedCustomer: null,
   adminCustomerForm: {
     name: '',
@@ -119,9 +120,9 @@ const elements = {
   profileAvatarPreview: document.getElementById('profileAvatarPreview'),
 
   totalCount: document.getElementById('totalCount'),
-  confirmedCount: document.getElementById('confirmedCount'),
-  pendingCount: document.getElementById('pendingCount'),
-  cancelledCount: document.getElementById('cancelledCount'),
+  adminStatTotal: document.getElementById('adminStatTotal'),
+  adminHistoryCard: document.getElementById('adminHistoryCard'),
+  historyCount: document.getElementById('historyCount'),
   memberChoiceGate: document.getElementById('memberChoiceGate'),
   userTabNav: document.getElementById('userTabNav'),
   userTabServices: document.getElementById('userTabServices'),
@@ -157,6 +158,9 @@ const elements = {
   membershipUsageLabel: document.getElementById('membershipUsageLabel'),
   membershipUsageBar: document.getElementById('membershipUsageBar'),
   membershipUsageNote: document.getElementById('membershipUsageNote'),
+  membershipCalendarMonth: document.getElementById('membershipCalendarMonth'),
+  membershipCalendarGrid: document.getElementById('membershipCalendarGrid'),
+  membershipCalendarDetails: document.getElementById('membershipCalendarDetails'),
   membershipNextSessionTitle: document.getElementById('membershipNextSessionTitle'),
   membershipNextSessionMeta: document.getElementById('membershipNextSessionMeta'),
   membershipQuickBookBtn: document.getElementById('membershipQuickBookBtn'),
@@ -227,12 +231,29 @@ const elements = {
   adminCouponSaveOnlyBtn: document.getElementById('adminCouponSaveOnlyBtn'),
   adminCouponList: document.getElementById('adminCouponList'),
   adminCouponEmptyState: document.getElementById('adminCouponEmptyState'),
+  adminUserCards: document.getElementById('adminUserCards'),
+  adminUserCardsEmpty: document.getElementById('adminUserCardsEmpty'),
+  adminUserSessionDialog: document.getElementById('adminUserSessionDialog'),
+  adminUserSessionTitle: document.getElementById('adminUserSessionTitle'),
+  adminUserSessionMeta: document.getElementById('adminUserSessionMeta'),
+  adminUserSessionCloseBtn: document.getElementById('adminUserSessionCloseBtn'),
+  adminUserSessionKpis: document.getElementById('adminUserSessionKpis'),
+  adminUserSessionList: document.getElementById('adminUserSessionList'),
+  adminUserSessionListEmpty: document.getElementById('adminUserSessionListEmpty'),
   membershipCouponCode: document.getElementById('membershipCouponCode'),
   membershipApplyCouponBtn: document.getElementById('membershipApplyCouponBtn'),
   membershipCouponPreview: document.getElementById('membershipCouponPreview'),
   userCouponCode: document.getElementById('userCouponCode'),
   userApplyCouponBtn: document.getElementById('userApplyCouponBtn'),
   userCouponPreview: document.getElementById('userCouponPreview'),
+
+  adminHistoryToggleBtn: document.getElementById('adminHistoryToggleBtn'),
+  adminHistoryToggleBtnWrap: document.getElementById('adminHistoryToggleBtnWrap'),
+  adminHistorySection: document.getElementById('adminHistorySection'),
+  adminTableTitle: document.getElementById('adminTableTitle'),
+
+  adminSessionSearch: document.getElementById('adminSessionSearch'),
+  adminMembershipSearch: document.getElementById('adminMembershipSearch'),
 
   openBookingBtn: document.getElementById('openBookingBtn'),
   dialog: document.getElementById('bookingDialog'),
@@ -245,6 +266,7 @@ const elements = {
   bookingDate: document.getElementById('bookingDate'),
   bookingTime: document.getElementById('bookingTime'),
   bookingNotes: document.getElementById('bookingNotes'),
+  experienceBookBtn: document.getElementById('experienceBookBtn'),
 };
 
 let isRegisterMode = false;
@@ -329,6 +351,7 @@ function attachEvents() {
     state.adminDiscountPhones = [];
     state.adminUsers = [];
     state.adminCoupons = [];
+    state.adminSelectedUserId = null;
     state.adminResolvedCustomer = null;
     state.adminCustomerForm = { name: '', email: '', phone: '' };
     state.postLoginChoice = '';
@@ -380,6 +403,7 @@ function attachEvents() {
     if (elements.dialog.open) elements.dialog.close();
     if (elements.profileDialog.open) elements.profileDialog.close();
     if (elements.membershipDialog?.open) elements.membershipDialog.close();
+    if (elements.adminUserSessionDialog?.open) elements.adminUserSessionDialog.close();
     renderAuthMode();
     render();
   });
@@ -533,6 +557,7 @@ function attachEvents() {
   });
   elements.closeProfileDialogBtn.addEventListener('click', closeProfileDialog);
   elements.cancelProfileBtn.addEventListener('click', closeProfileDialog);
+  elements.adminUserSessionCloseBtn?.addEventListener('click', closeAdminUserSessionDialog);
   elements.profileForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const submitBtn = elements.profileForm.querySelector('button[type="submit"]');
@@ -636,6 +661,20 @@ function attachEvents() {
   });
 
   elements.openBookingBtn?.addEventListener('click', () => openDialog());
+  elements.experienceBookBtn?.addEventListener('click', () => {
+    state.forceExperienceBooking = true;
+    openDialog();
+  });
+  elements.experienceBookBtn?.addEventListener('click', () => {
+    openDialog();
+    const experienceService =
+      state.services.find((service) => String(service.name || '').trim().toLowerCase() === 'experience session') ||
+      state.services.find((service) => String(service.name || '').trim().toLowerCase().includes('experience')) ||
+      null;
+    if (experienceService && elements.serviceName) {
+      elements.serviceName.value = experienceService.name;
+    }
+  });
   elements.bookingForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     await upsertBooking();
@@ -661,6 +700,46 @@ function attachEvents() {
     elements.statusFilter.value = 'all';
     elements.dateFilter.value = '';
     render();
+  });
+
+  elements.adminHistoryToggleBtn?.addEventListener('click', () => {
+    state.adminHistoryVisible = !state.adminHistoryVisible;
+    render();
+    if (state.adminHistoryVisible) {
+      requestAnimationFrame(() => {
+        elements.adminHistorySection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  });
+
+
+
+  elements.adminSessionSearch?.addEventListener('input', (event) => {
+    state.adminSessionSearch = String(event.target.value || '').trim().toLowerCase();
+    render();
+  });
+
+  elements.adminMembershipSearch?.addEventListener('input', (event) => {
+    state.adminMembershipSearch = String(event.target.value || '').trim().toLowerCase();
+    render();
+  });
+
+  elements.adminStatTotal?.addEventListener('click', () => {
+    state.adminHistoryVisible = false;
+    render();
+    requestAnimationFrame(() => {
+      elements.adminHistorySection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  elements.adminHistoryCard?.addEventListener('click', () => {
+    state.adminHistoryVisible = !state.adminHistoryVisible;
+    render();
+    if (state.adminHistoryVisible) {
+      requestAnimationFrame(() => {
+        elements.adminHistorySection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
   });
 
   document.addEventListener('click', (event) => {
@@ -1040,51 +1119,70 @@ async function loadDashboardData() {
 }
 
 async function loadServiceAvailability() {
-  if (!state.selectedServiceCategory || !state.selectedServiceDate) return;
-  if (state.user?.role === 'admin' && !isAdminCustomerFormReady()) return;
+  if (!state.selectedServiceCategory || !state.selectedServiceDate) {
+    state.slotAvailabilityLoading = false;
+    renderServices();
+    return;
+  }
+  if (state.user?.role === 'admin' && !isAdminCustomerFormReady()) {
+    state.slotAvailabilityLoading = false;
+    renderServices();
+    return;
+  }
   const requestId = ++availabilityRequestId;
   state.slotAvailabilityLoading = true;
   renderServices();
 
-  try {
-    const params = new URLSearchParams({
-      bookingDate: state.selectedServiceDate,
-      category: state.selectedServiceCategory,
-    });
-    if (state.user?.role === 'admin') {
-      params.set('customerEmail', state.adminCustomerForm.email);
-    }
-    const result = await api(`/api/services/availability?${params.toString()}`);
-    if (requestId !== availabilityRequestId) return;
-    state.slotAvailability = result.availability || {};
-    state.slotCapacityByService = result.slotCapacityByService || {};
-    state.slotHoldCounts = result.holds || {};
-    state.bookingHoldMinutes = Number(result.holdMinutes || BOOKING_HOLD_MINUTES) || BOOKING_HOLD_MINUTES;
-    const todayIso = getTodayIsoDate();
-    const hasFutureSlots = SLOT_OPTIONS.some(
-      (slot) => !isBookingSlotInPast(state.selectedServiceDate, slot.value)
-    );
-    if (!hasFutureSlots && state.selectedServiceDate === todayIso) {
-      state.slotAutoShiftedNotice = 'Today has no remaining slots. Showing the next available day.';
-      state.selectedServiceDate = getTomorrowIsoDate();
+  const params = new URLSearchParams({
+    bookingDate: state.selectedServiceDate,
+    category: state.selectedServiceCategory,
+  });
+  if (state.user?.role === 'admin' && isAdminCustomerFormReady()) {
+    params.set('customerEmail', state.adminCustomerForm.email);
+  }
+  const apiBase = API_URL || window.location.origin;
+  const url = `${apiBase}/api/services/availability?${params.toString()}`;
+
+  fetch(url)
+    .then((res) => res.json())
+    .then((data) => {
+      if (requestId !== availabilityRequestId) return;
+      console.log('API DATA:', data);
+
+      // 🔥 THIS IS THE FIX
+      state.slotAvailability = data.slots || data.availability || {};
+      state.slotCapacityByService = data.slotCapacityByService || {};
+      state.slotHoldCounts = data.holds || {};
+      state.bookingHoldMinutes = Number(data.holdMinutes || BOOKING_HOLD_MINUTES) || BOOKING_HOLD_MINUTES;
+
+      const todayIso = getTodayIsoDate();
+      const hasFutureSlots = SLOT_OPTIONS.some(
+        (slot) => !isBookingSlotInPast(state.selectedServiceDate, slot.value)
+      );
+      if (!hasFutureSlots && state.selectedServiceDate === todayIso) {
+        state.slotAutoShiftedNotice = 'Today has no remaining slots. Showing the next available day.';
+        state.selectedServiceDate = getTomorrowIsoDate();
+        state.slotAvailability = {};
+        state.slotCapacityByService = {};
+        state.slotHoldCounts = {};
+        state.slotAvailabilityLoading = true;
+        renderServices();
+        loadServiceAvailability();
+        return;
+      }
+
+      state.slotAvailabilityLoading = false;
+      renderServices();
+    })
+    .catch((err) => {
+      if (requestId !== availabilityRequestId) return;
+      console.error(err);
       state.slotAvailability = {};
       state.slotCapacityByService = {};
       state.slotHoldCounts = {};
-      state.slotAvailabilityLoading = true;
+      state.slotAvailabilityLoading = false;
       renderServices();
-      await loadServiceAvailability();
-      return;
-    }
-  } catch {
-    if (requestId !== availabilityRequestId) return;
-    state.slotAvailability = {};
-    state.slotCapacityByService = {};
-    state.slotHoldCounts = {};
-  } finally {
-    if (requestId !== availabilityRequestId) return;
-    state.slotAvailabilityLoading = false;
-    renderServices();
-  }
+    });
 }
 
 function refreshSelectedCategoryAvailability(bookingDate = '') {
@@ -1175,6 +1273,11 @@ function populateTimeSlots() {
 function populateServiceOptions(selectedService = '') {
   elements.serviceName.innerHTML = '';
   for (const service of state.services) {
+    const category = String(service.category || '').toUpperCase();
+    const isExperience = category === 'EXPERIENCE SESSION' || String(service.name || '').toLowerCase().includes('experience');
+    if (isExperience && !state.forceExperienceBooking && selectedService !== service.name) {
+      continue;
+    }
     const option = document.createElement('option');
     option.value = service.name;
     const isIncluded = Boolean(service.membershipOnly) && isCurrentUserMembershipActive();
@@ -1276,11 +1379,38 @@ function openDialog(booking = null) {
     elements.bookingTime.value = SLOT_OPTIONS[0].value;
   }
 
+  if (!booking && state.forceExperienceBooking) {
+    const experienceService =
+      state.services.find((service) => String(service.name || '').trim().toLowerCase() === 'experience session') ||
+      state.services.find((service) => String(service.name || '').trim().toLowerCase().includes('experience')) ||
+      null;
+    if (experienceService && elements.serviceName) {
+      elements.serviceName.value = experienceService.name;
+      elements.serviceName.disabled = true;
+    }
+    const experienceLabel = document.getElementById('experienceServiceLabel');
+    if (experienceLabel) {
+      experienceLabel.hidden = false;
+    }
+    if (elements.serviceName) {
+      elements.serviceName.hidden = true;
+    }
+  }
+
   elements.dialog.showModal();
 }
 
 function closeDialog() {
   elements.dialog.close();
+  state.forceExperienceBooking = false;
+  const experienceLabel = document.getElementById('experienceServiceLabel');
+  if (experienceLabel) {
+    experienceLabel.hidden = true;
+  }
+  if (elements.serviceName) {
+    elements.serviceName.hidden = false;
+    elements.serviceName.disabled = false;
+  }
 }
 
 function openProfileDialog() {
@@ -1301,6 +1431,21 @@ function closeProfileDialog() {
   clearProfilePreviewObjectUrl();
   elements.profileDialog.close();
   renderProfileAvatar();
+}
+
+function openAdminUserSessionDialog(userId) {
+  if (!elements.adminUserSessionDialog) return;
+  state.adminSelectedUserId = userId == null ? null : String(userId);
+  renderAdminUserSessionDialog();
+  if (elements.adminUserSessionDialog.open) {
+    elements.adminUserSessionDialog.close();
+  }
+  elements.adminUserSessionDialog.showModal();
+}
+
+function closeAdminUserSessionDialog() {
+  if (!elements.adminUserSessionDialog) return;
+  elements.adminUserSessionDialog.close();
 }
 
 async function saveProfile() {
@@ -2120,6 +2265,57 @@ function getFilteredBookings(sourceBookings = state.bookings) {
     .sort((a, b) => `${a.bookingDate}T${a.bookingTime}`.localeCompare(`${b.bookingDate}T${b.bookingTime}`));
 }
 
+function getFilteredAdminUsers() {
+  const users = Array.isArray(state.adminUsers) ? state.adminUsers : [];
+  const query = String(state.adminSessionSearch || '').trim().toLowerCase();
+  if (!query) return users;
+  return users.filter((user) => {
+    const haystack = [user?.id, user?.name, user?.email, user?.mobile].join(' ').toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function getFilteredAdminMembershipOrders() {
+  const orders = Array.isArray(state.adminMembershipOrders) ? state.adminMembershipOrders : [];
+  const query = String(state.adminMembershipSearch || '').trim().toLowerCase();
+  const paidOrders = orders.filter((order) => String(order?.status || '').trim().toLowerCase() === 'paid');
+  
+  // Keep only the latest order per user
+  const userLatestOrders = new Map();
+  for (const order of paidOrders) {
+    const userId = String(order?.userId || '');
+    if (!userId) continue;
+    
+    const existing = userLatestOrders.get(userId);
+    if (!existing) {
+      userLatestOrders.set(userId, order);
+    } else {
+      const existingDate = new Date(existing.paidAt || existing.createdAt || 0).getTime();
+      const currentDate = new Date(order.paidAt || order.createdAt || 0).getTime();
+      if (currentDate > existingDate) {
+        userLatestOrders.set(userId, order);
+      }
+    }
+  }
+  
+  const deduplicatedOrders = Array.from(userLatestOrders.values());
+  
+  if (!query) return deduplicatedOrders;
+  return deduplicatedOrders.filter((order) => {
+    const haystack = [order?.userId, order?.userName, order?.userEmail, order?.userMobile, order?.planId].join(' ').toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function getTodayAdminBookings(bookings = state.bookings) {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const todayKey = `${yyyy}-${mm}-${dd}`;
+  return (Array.isArray(bookings) ? bookings : []).filter((booking) => String(booking?.bookingDate || '') === todayKey);
+}
+
 function render() {
   const isAuthenticated = Boolean(state.user);
   document.body.classList.toggle('auth-mode', !isAuthenticated);
@@ -2187,7 +2383,7 @@ function render() {
   }
 
   const filtered = getFilteredBookings(state.bookings);
-  renderStats(filtered);
+  renderStats(state.bookings);
   renderMembership();
   renderServices();
   renderMembershipCouponPreview();
@@ -2195,7 +2391,31 @@ function render() {
   renderCartCouponPreview();
 
   if (isAdmin) {
-    renderAdminRows(filtered);
+    const todayBookings = getTodayAdminBookings(state.bookings);
+    renderAdminUserCards();
+    
+    // Determine what to show in the table
+    let adminFiltered;
+    let tableTitle = "Today's Bookings";
+    if (state.adminHistoryVisible) {
+      // Show ALL bookings when history is open
+      adminFiltered = state.bookings;
+      tableTitle = "History of All Bookings";
+    } else {
+      // Show today's bookings
+      adminFiltered = todayBookings;
+    }
+    
+    // Update title and button visibility
+    if (elements.adminTableTitle) {
+      elements.adminTableTitle.textContent = tableTitle;
+    }
+    if (elements.adminHistoryToggleBtnWrap) {
+      elements.adminHistoryToggleBtnWrap.hidden = !state.adminHistoryVisible;
+    }
+    
+    renderAdminRows(adminFiltered);
+    renderAdminUserSessionDialog();
     renderAdminMembershipOrders();
     renderAdminDiscountPhones();
     renderAdminDiscountUsers();
@@ -2276,7 +2496,7 @@ function isCurrentUserMembershipActive() {
   const startedAt = state.user?.membershipStartedAt ? new Date(state.user.membershipStartedAt).getTime() : NaN;
   const storedExpiresAt = state.user?.membershipExpiresAt ? new Date(state.user.membershipExpiresAt).getTime() : NaN;
   const expiresAt = Number.isFinite(startedAt)
-    ? startedAt + 90 * 24 * 60 * 60 * 1000
+    ? startedAt + 365 * 24 * 60 * 60 * 1000
     : storedExpiresAt;
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
@@ -2284,7 +2504,7 @@ function isCurrentUserMembershipActive() {
 function getEffectiveMembershipExpiryDate(startedAtValue, expiresAtValue) {
   const startedAt = startedAtValue ? new Date(startedAtValue).getTime() : NaN;
   if (Number.isFinite(startedAt)) {
-    return new Date(startedAt + 90 * 24 * 60 * 60 * 1000);
+    return new Date(startedAt + 365 * 24 * 60 * 60 * 1000);
   }
   const expiresAt = expiresAtValue ? new Date(expiresAtValue) : null;
   return expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null;
@@ -2308,6 +2528,12 @@ function renderProfileMembershipBadge() {
 function renderServices() {
   if (!elements.serviceGrid) return;
 
+  const experienceCard = document.getElementById('experienceCard');
+  if (experienceCard) {
+    const isMember = isCurrentUserMembershipActive();
+    experienceCard.hidden = isMember;
+  }
+
   elements.serviceGrid.innerHTML = '';
   if (!state.services.length) {
     elements.serviceEmpty.hidden = false;
@@ -2317,63 +2543,145 @@ function renderServices() {
   }
 
   elements.serviceEmpty.hidden = true;
-  const orderedCategories = ['HYDROGEN SESSION', 'MEMBERSHIP SERVICES', 'IV THERAPIES', 'IV SHOTS'];
+  const orderedCategories = ['HYDROGEN SESSION', 'IV THERAPIES', 'IV SHOTS'];
   const grouped = new Map();
+  
   for (const category of orderedCategories) grouped.set(category, []);
   for (const service of state.services) {
     const category = String(service.category || '').toUpperCase();
     if (grouped.has(category)) grouped.get(category).push(service);
   }
 
-  const categoryGrid = document.createElement('div');
-  categoryGrid.className = 'service-category-grid';
+  // Initialize state for tracking expanded categories
+  if (!state.expandedServiceCategories) {
+    state.expandedServiceCategories = {};
+  }
+
+  // Display all service categories as collapsible cards
   for (const category of orderedCategories) {
-    const categoryServices = grouped.get(category) || [];
-    const tile = document.createElement('button');
-    tile.type = 'button';
-    tile.className = 'service-category-card';
-    if (state.selectedServiceCategory === category) {
-      tile.classList.add('is-active');
-    }
-    tile.disabled = categoryServices.length === 0;
-    tile.innerHTML = `
-      <span class="service-category-name">${escapeHtml(category)}</span>
-      <span class="service-category-meta">${categoryServices.length} option${categoryServices.length === 1 ? '' : 's'}</span>
+    const services = grouped.get(category) || [];
+    if (!services.length) continue;
+
+    const categoryCard = document.createElement('div');
+    categoryCard.className = 'service-category-card';
+    categoryCard.dataset.category = category;
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'service-category-header';
+    const isExpanded = state.expandedServiceCategories[category];
+    header.innerHTML = `
+      <div class="category-info">
+        <h3 class="category-name">${escapeHtml(category)}</h3>
+        <span class="category-count">${services.length} service${services.length === 1 ? '' : 's'}</span>
+      </div>
+      <span class="expand-icon" aria-label="${isExpanded ? 'collapse' : 'expand'}">${isExpanded ? '−' : '+'}</span>
     `;
-    tile.addEventListener('click', () => {
-      state.selectedServiceCategory = category;
-      resetHydrogenComposer({ keepCategory: true });
-      resetSingleSessionComposer();
-      state.selectedServiceCategory = category;
-      if (category === 'HYDROGEN SESSION') {
-        const firstHydrogenService = (grouped.get('HYDROGEN SESSION') || [])[0];
-        state.selectedHydrogenServiceName = firstHydrogenService?.name || '';
-      }
-      if (!state.selectedServiceDate) state.selectedServiceDate = getTodayIsoDate();
-      state.slotAvailability = {};
-      state.slotAvailabilityLoading = true;
+
+    header.addEventListener('click', () => {
+      state.expandedServiceCategories[category] = !state.expandedServiceCategories[category];
       renderServices();
-      loadServiceAvailability();
     });
-    categoryGrid.appendChild(tile);
-  }
-  elements.serviceGrid.appendChild(categoryGrid);
 
-  if (!state.selectedServiceCategory) {
-    return;
+    categoryCard.appendChild(header);
+
+    // Render service details if category is expanded
+    if (isExpanded) {
+      const detailsContainer = document.createElement('div');
+      detailsContainer.className = 'service-category-details';
+
+      for (const service of services) {
+        const serviceCard = createServiceDetailItem(service);
+        detailsContainer.appendChild(serviceCard);
+      }
+
+      categoryCard.appendChild(detailsContainer);
+    }
+
+    elements.serviceGrid.appendChild(categoryCard);
+  }
+}
+
+function createServiceDetailItem(service) {
+  const card = document.createElement('article');
+  card.className = 'service-detail-item';
+
+  const effectivePrice = Number(service.effectivePriceInr ?? service.priceInr ?? 0);
+  const hasMemberAccess = isCurrentUserMembershipActive();
+  const isMembershipOnly = Boolean(service.membershipOnly);
+
+  const infoSection = document.createElement('div');
+  infoSection.className = 'service-item-info';
+  infoSection.innerHTML = `
+    <h4>${escapeHtml(service.name)}</h4>
+    ${service.description ? `<p class="service-description">${escapeHtml(service.description)}</p>` : ''}
+  `;
+
+  const priceSection = document.createElement('div');
+  priceSection.className = 'service-item-pricing';
+  
+  const priceDisplay = document.createElement('span');
+  priceDisplay.className = 'service-price';
+  if (isMembershipOnly && !hasMemberAccess) {
+    priceDisplay.textContent = 'Members Only';
+  } else if (isMembershipOnly && hasMemberAccess) {
+    priceDisplay.textContent = 'Included';
+  } else {
+    priceDisplay.textContent = `₹${effectivePrice.toLocaleString('en-IN')}`;
+  }
+  priceSection.appendChild(priceDisplay);
+
+  // Show session count for multi-session services
+  const sessionCount = getHydrogenSessionCountFromServiceName(service.name);
+  if (sessionCount > 1) {
+    const sessionBadge = document.createElement('span');
+    sessionBadge.className = 'service-sessions';
+    sessionBadge.textContent = `${sessionCount}×`;
+    priceSection.appendChild(sessionBadge);
   }
 
-  const selectedCategory = state.selectedServiceCategory;
-  const selectedServices = grouped.get(selectedCategory) || [];
-  const isHydrogenCategory = selectedCategory === 'HYDROGEN SESSION';
-  const isMembershipServicesCategory = selectedCategory === 'MEMBERSHIP SERVICES';
-  const isSingleSessionCategory =
-    selectedCategory === 'IV THERAPIES' ||
-    selectedCategory === 'IV SHOTS' ||
-    selectedCategory === 'MEMBERSHIP SERVICES';
-  const section = document.createElement('section');
-  section.className = 'service-section service-cluster';
-  section.dataset.serviceCategory = selectedCategory;
+  const buttonSection = document.createElement('div');
+  buttonSection.className = 'service-item-actions';
+  
+  const bookButton = document.createElement('button');
+  bookButton.type = 'button';
+  bookButton.className = 'service-book-btn btn btn-primary';
+  bookButton.textContent = 'Book';
+  bookButton.disabled = isMembershipOnly && !hasMemberAccess;
+  bookButton.addEventListener('click', () => {
+    openDialog();
+    elements.serviceName.value = service.name;
+    elements.bookingDate.value = getTodayIsoDate();
+    elements.bookingTime.value = SLOT_OPTIONS[0].value;
+  });
+  buttonSection.appendChild(bookButton);
+
+  card.appendChild(infoSection);
+  card.appendChild(priceSection);
+  card.appendChild(buttonSection);
+
+  return card;
+}
+
+function getHydrogenSessionCountFromServiceName(serviceName) {
+  const raw = String(serviceName || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('single')) return 1;
+
+  // Prefer explicit session count mentions like "(4 Sessions)".
+  let match = raw.match(/\((\d+)\s*session/i);
+  if (match) return Number(match[1]);
+
+  match = raw.match(/\b(\d+)\s*session/i);
+  if (match) return Number(match[1]);
+
+  // Fallback: ignore "H2" prefix and use first standalone number.
+  const cleaned = normalized.replace(/\bh2\b/g, ' ');
+  match = cleaned.match(/\b(\d+)\b/);
+  return match ? Number(match[1]) : 1;
+}
+
+function getHydrogenPlanOptions(services) {
   section.innerHTML = `
     <header class="service-cluster-head">
       <div>
@@ -2394,6 +2702,8 @@ function renderServices() {
   backButton.className = 'btn btn-secondary service-back-btn';
   backButton.textContent = 'Back to categories';
   backButton.addEventListener('click', () => {
+    state.selectedServiceCategory = null;
+    state.adminServiceDetailsExpanded = {};
     resetHydrogenComposer();
     resetSingleSessionComposer();
     state.slotAvailability = {};
@@ -2459,8 +2769,12 @@ function renderServices() {
 
     const sidebar = document.createElement('aside');
     sidebar.className = 'hydrogen-sidebar';
+    const consultationBenefit = isCurrentUserMembershipActive()
+      ? '<div class="hydrogen-benefit-tag">Free Consultation Session</div>'
+      : '';
     sidebar.innerHTML = `
       <h4 class="hydrogen-sidebar-title">Hydrogen Therapy</h4>
+      ${consultationBenefit}
       <div class="hydrogen-plan-controls">
         <label>
           Session Package
@@ -2575,6 +2889,15 @@ function renderServices() {
         <h3>${escapeHtml(selectedService.name)}</h3>
       </div>
     `;
+    if (String(selectedService.name || '') === 'H2 Single Session' && isCurrentUserMembershipActive()) {
+      const initiationBlock = document.createElement('div');
+      initiationBlock.className = 'service-info-block';
+      initiationBlock.innerHTML = `
+        <strong>Initiation Session (1 hr)</strong>
+        <span>Full doctor consultation + diagnostic &amp; genetic testing</span>
+      `;
+      card.appendChild(initiationBlock);
+    }
 
     const addOnPanel = document.createElement('div');
     addOnPanel.className = 'hydrogen-addon-panel';
@@ -2823,6 +3146,15 @@ function renderServices() {
         ${isMembershipOnly && !hasMemberAccess ? '<p class="service-price-meta">Booking is only available for active members.</p>' : ''}
       </div>
     `;
+    if (String(selectedService.name || '') === 'H2 Single Session') {
+      const initiationBlock = document.createElement('div');
+      initiationBlock.className = 'service-info-block';
+      initiationBlock.innerHTML = `
+        <strong>Initiation Session (1 hr)</strong>
+        <span>Full doctor consultation + diagnostic &amp; genetic testing</span>
+      `;
+      card.appendChild(initiationBlock);
+    }
 
     const editor = document.createElement('div');
     editor.className = 'hydrogen-session-editor';
@@ -3168,6 +3500,118 @@ function getMaxBookingIsoDate() {
   return `${year}-${month}-${day}`;
 }
 
+function getCalendarMonthLabel(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+}
+
+function getCalendarDateKey(year, monthIndex, day) {
+  const month = String(monthIndex + 1).padStart(2, '0');
+  const dayValue = String(day).padStart(2, '0');
+  return `${year}-${month}-${dayValue}`;
+}
+
+function buildBookingsByDate(bookings, year, monthIndex) {
+  const map = new Map();
+  const monthKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-`;
+  for (const booking of bookings) {
+    const rawDate = String(booking?.bookingDate || '').trim();
+    if (!rawDate.startsWith(monthKey)) continue;
+    const match = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) continue;
+    if (!map.has(rawDate)) map.set(rawDate, []);
+    map.get(rawDate).push(booking);
+  }
+  return map;
+}
+
+function renderMembershipCalendarDetails(dateKey, bookings) {
+  if (!elements.membershipCalendarDetails) return;
+  if (!dateKey) {
+    elements.membershipCalendarDetails.textContent = 'Select a date to view sessions.';
+    return;
+  }
+  const label = formatBookingDateLabel(dateKey);
+  if (!bookings.length) {
+    elements.membershipCalendarDetails.innerHTML = `
+      <div>${escapeHtml(label)}</div>
+      <span>No sessions booked.</span>
+    `;
+    return;
+  }
+  const limited = bookings.slice(0, 3);
+  const lines = limited
+    .map(
+      (booking) => `
+        <div class="membership-calendar-detail-item">
+          <strong>${escapeHtml(booking.serviceName || 'Session')}</strong>
+          <span>${escapeHtml(formatBookingTimeLabel(booking.bookingTime))}</span>
+        </div>
+      `
+    )
+    .join('');
+  const moreCount = bookings.length - limited.length;
+  const moreLine = moreCount > 0 ? `<span>+${moreCount} more</span>` : '';
+  elements.membershipCalendarDetails.innerHTML = `
+    <div>${escapeHtml(label)}</div>
+    ${lines}
+    ${moreLine}
+  `;
+}
+
+function renderMembershipCalendar(bookings) {
+  if (!elements.membershipCalendarGrid || !elements.membershipCalendarMonth) return;
+  const today = new Date();
+  const year = today.getFullYear();
+  const monthIndex = today.getMonth();
+  elements.membershipCalendarMonth.textContent = getCalendarMonthLabel(today);
+
+  const firstOfMonth = new Date(year, monthIndex, 1);
+  const startDay = firstOfMonth.getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const bookedByDate = buildBookingsByDate(bookings, year, monthIndex);
+  const bookedDates = Array.from(bookedByDate.keys()).sort();
+  const todayKey = getCalendarDateKey(year, monthIndex, today.getDate());
+  if (!state.membershipCalendarSelectedDate || !state.membershipCalendarSelectedDate.startsWith(`${year}-`)) {
+    state.membershipCalendarSelectedDate = bookedDates[0] || todayKey;
+  }
+  if (!state.membershipCalendarSelectedDate.startsWith(`${year}-${String(monthIndex + 1).padStart(2, '0')}-`)) {
+    state.membershipCalendarSelectedDate = bookedDates[0] || todayKey;
+  }
+
+  elements.membershipCalendarGrid.innerHTML = '';
+  const totalCells = 42;
+  for (let index = 0; index < totalCells; index += 1) {
+    const dayNumber = index - startDay + 1;
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'membership-calendar-day';
+    if (dayNumber < 1 || dayNumber > daysInMonth) {
+      cell.classList.add('is-outside');
+      cell.disabled = true;
+      cell.textContent = '';
+    } else {
+      const dateKey = getCalendarDateKey(year, monthIndex, dayNumber);
+      cell.textContent = String(dayNumber);
+      if (dateKey === todayKey) cell.classList.add('is-today');
+      if (dateKey === state.membershipCalendarSelectedDate) cell.classList.add('is-selected');
+      if (bookedByDate.has(dateKey)) cell.classList.add('is-booked');
+      cell.addEventListener('click', () => {
+        state.membershipCalendarSelectedDate = dateKey;
+        renderMembershipCalendar(bookings);
+      });
+    }
+    elements.membershipCalendarGrid.appendChild(cell);
+  }
+
+  renderMembershipCalendarDetails(
+    state.membershipCalendarSelectedDate,
+    bookedByDate.get(state.membershipCalendarSelectedDate) || []
+  );
+}
+
 function renderMembership() {
   if (!elements.membershipPlans || !elements.membershipStatusText) return;
   if (state.user?.role !== 'user') return;
@@ -3201,17 +3645,21 @@ function renderMembership() {
   }
 
   if (elements.membershipDashboard) {
-    elements.membershipDashboard.hidden = false;
+    elements.membershipDashboard.hidden = !active;
   }
 
-  const firstName = String(state.user?.name || 'Member').trim().split(/\s+/)[0] || 'Member';
-  if (elements.membershipWelcomeName) {
-    elements.membershipWelcomeName.textContent = `Welcome, ${firstName}`;
-  }
-  if (elements.membershipDashboardStatus) {
-    elements.membershipDashboardStatus.textContent = active
-      ? `${activePlanName}${effectiveExpiry ? ` • valid till ${effectiveExpiry.toLocaleDateString()}` : ''}`
-      : 'Activate a membership to unlock member pricing and benefits.';
+  if (active) {
+    const firstName = String(state.user?.name || 'Member').trim().split(/\s+/)[0] || 'Member';
+    if (elements.membershipWelcomeName) {
+      elements.membershipWelcomeName.textContent = `Welcome, ${firstName}`;
+    }
+    if (elements.membershipDashboardStatus) {
+      elements.membershipDashboardStatus.textContent = `${activePlanName}${
+        effectiveExpiry ? ` • valid till ${effectiveExpiry.toLocaleDateString()}` : ''
+      }`;
+    }
+  } else if (elements.membershipDashboardStatus) {
+    elements.membershipDashboardStatus.textContent = '';
   }
 
   if (elements.membershipStatSessions) {
@@ -3261,6 +3709,9 @@ function renderMembership() {
       ? formatDateTime(upcoming.bookingDate, upcoming.bookingTime)
       : 'Book your next session to keep momentum.';
   }
+  if (active) {
+    renderMembershipCalendar((state.bookings || []).filter((booking) => String(booking.status || '').toLowerCase() !== 'cancelled'));
+  }
 
   const orderedPlanIds = ['h2_single', 'h2_two', 'h2_four'];
   const plans = orderedPlanIds
@@ -3304,7 +3755,7 @@ function renderMembership() {
       </div>
       <div class="membership-card-price-block">
         <p class="membership-price">Rs. ${estimatedAmountInr.toLocaleString('en-IN')}</p>
-        <p class="membership-price-caption">3-month access • ${escapeHtml(plan.validityDays)} days</p>
+        <p class="membership-price-caption">1-year access • ${escapeHtml(plan.validityDays)} days</p>
       </div>
       <div class="membership-card-metrics">
         <div class="membership-card-metric">
@@ -3754,18 +4205,220 @@ function getInitials(name) {
 }
 
 function renderStats(bookings) {
-  if (!elements.totalCount || !elements.confirmedCount || !elements.pendingCount || !elements.cancelledCount) {
+  if (!elements.totalCount) {
     return;
   }
-  const total = bookings.length;
-  const confirmed = bookings.filter((b) => b.status === 'confirmed').length;
-  const pending = bookings.filter((b) => b.status === 'pending' || b.status === 'booked').length;
-  const cancelled = bookings.filter((b) => b.status === 'cancelled').length;
+  const source = state.user?.role === 'admin' ? getTodayAdminBookings(bookings) : bookings;
+  const total = source.length;
+  const allBookingsCount = Array.isArray(bookings) ? bookings.length : 0;
 
   elements.totalCount.textContent = String(total);
-  elements.confirmedCount.textContent = String(confirmed);
-  elements.pendingCount.textContent = String(pending);
-  elements.cancelledCount.textContent = String(cancelled);
+  if (elements.historyCount) elements.historyCount.textContent = String(allBookingsCount);
+
+  // Apply visual feedback for active state
+  if (state.user?.role === 'admin') {
+    elements.adminHistoryCard?.classList.toggle('is-active', state.adminHistoryVisible);
+  }
+}
+
+function getAdminUserBookings(userId) {
+  const normalizedId = String(userId || '');
+  return (Array.isArray(state.bookings) ? state.bookings : [])
+    .filter((booking) => String(booking?.userId || '') === normalizedId)
+    .sort((a, b) => `${a.bookingDate}T${a.bookingTime}`.localeCompare(`${b.bookingDate}T${b.bookingTime}`));
+}
+
+function getBookingStartTime(booking) {
+  const bookingDate = String(booking?.bookingDate || '').trim();
+  const bookingTime = String(booking?.bookingTime || '').trim();
+  if (!bookingDate || !bookingTime) return Number.NaN;
+  const timestamp = new Date(`${bookingDate}T${bookingTime}:00`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Number.NaN;
+}
+
+function isBookingMissed(booking) {
+  const status = String(booking?.status || '').trim().toLowerCase();
+  if (status === 'missed') return true;
+  if (status === 'completed' || status === 'cancelled') return false;
+  const bookingStart = getBookingStartTime(booking);
+  return Number.isFinite(bookingStart) && bookingStart < Date.now();
+}
+
+function buildAdminUserSessionSummary(user) {
+  const bookings = getAdminUserBookings(user?.id);
+  const activeBookings = bookings.filter((booking) => String(booking?.status || '').toLowerCase() !== 'cancelled');
+  const completed = activeBookings.filter((booking) => String(booking?.status || '').toLowerCase() === 'completed').length;
+  const missed = activeBookings.filter(isBookingMissed).length;
+  const remaining = activeBookings.filter((booking) => {
+    const status = String(booking?.status || '').toLowerCase();
+    return status !== 'completed' && !isBookingMissed(booking);
+  }).length;
+
+  return {
+    bookings,
+    total: activeBookings.length,
+    completed,
+    remaining,
+    missed,
+  };
+}
+
+function getMembershipPlanSessionAllowance(user) {
+  const planId = String(user?.membershipPlan || '').trim();
+  const peopleCount = Math.max(1, Number(user?.membershipPeopleCount || 1));
+  const planSessionsById = {
+    h2_single: 16,
+    h2_two: 32,
+    h2_four: 64,
+    h2_add_person: 16,
+  };
+  const totalSessions = Number(planSessionsById[planId] || 0);
+  if (!totalSessions) {
+    return {
+      planLabel: 'No active plan',
+      totalSessions: 0,
+      perUserSessions: 0,
+    };
+  }
+  return {
+    planLabel: getMembershipPlanDisplayName(planId),
+    totalSessions,
+    perUserSessions: Math.floor(totalSessions / peopleCount),
+  };
+}
+
+function renderAdminUserCards() {
+  if (!elements.adminUserCards || !elements.adminUserCardsEmpty) return;
+
+  const users = getFilteredAdminUsers();
+  elements.adminUserCards.innerHTML = '';
+
+  if (!users.length) {
+    elements.adminUserCardsEmpty.hidden = false;
+    return;
+  }
+
+  elements.adminUserCardsEmpty.hidden = true;
+  users.forEach((user) => {
+    const summary = buildAdminUserSessionSummary(user);
+    const membership = getMembershipPlanSessionAllowance(user);
+    const completionPercent = summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'admin-user-card';
+    card.innerHTML = `
+      <div class="admin-user-card-top">
+        <span class="admin-user-card-avatar">${escapeHtml(getInitials(user?.name || 'User'))}</span>
+        <span class="admin-user-card-tag">User #${escapeHtml(String(user?.id || '-'))}</span>
+      </div>
+      <div class="admin-user-card-main">
+        <div class="admin-user-card-body">
+          <h3>${escapeHtml(user?.name || 'Unnamed User')}</h3>
+          <p>${escapeHtml(user?.email || user?.mobile || 'No contact info')}</p>
+          <p class="admin-user-plan-copy">${escapeHtml(
+            membership.totalSessions
+              ? `${membership.planLabel} ? ${membership.perUserSessions} sessions per user`
+              : membership.planLabel
+          )}</p>
+        </div>
+        <div class="admin-user-donut-wrap">
+          <div class="admin-user-donut" style="--donut-angle:${completionPercent}%;"><span>${escapeHtml(
+            String(summary.completed)
+          )}/${escapeHtml(String(summary.total))}</span></div>
+          <small>Completed</small>
+        </div>
+      </div>
+      <div class="admin-user-card-footer">
+        <span><strong>${summary.total}</strong> total sessions</span>
+        <span><strong>${summary.completed}</strong> completed</span>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      openAdminUserSessionDialog(user.id);
+    });
+    elements.adminUserCards.appendChild(card);
+  });
+}
+
+function renderAdminUserSessionDialog() {
+  if (
+    !elements.adminUserSessionTitle ||
+    !elements.adminUserSessionMeta ||
+    !elements.adminUserSessionKpis ||
+    !elements.adminUserSessionList ||
+    !elements.adminUserSessionListEmpty
+  ) {
+    return;
+  }
+
+  const selectedUser = (Array.isArray(state.adminUsers) ? state.adminUsers : []).find(
+    (user) => String(user?.id || '') === String(state.adminSelectedUserId || '')
+  );
+
+  if (!selectedUser) {
+    elements.adminUserSessionTitle.textContent = 'User Sessions';
+    elements.adminUserSessionMeta.textContent = '';
+    elements.adminUserSessionKpis.innerHTML = '';
+    elements.adminUserSessionList.innerHTML = '';
+    elements.adminUserSessionListEmpty.hidden = false;
+    return;
+  }
+
+  const summary = buildAdminUserSessionSummary(selectedUser);
+  elements.adminUserSessionTitle.textContent = selectedUser.name || 'User Sessions';
+  elements.adminUserSessionMeta.textContent = [selectedUser.email, selectedUser.mobile ? `ID ${selectedUser.id} • ${selectedUser.mobile}` : `ID ${selectedUser.id}`]
+    .filter(Boolean)
+    .join(' • ');
+
+  const kpis = [
+    { title: 'Total Sessions', value: summary.total, tone: 'total' },
+    { title: 'Completed Sessions', value: summary.completed, tone: 'completed' },
+    { title: 'Remaining Sessions', value: summary.remaining, tone: 'remaining' },
+    { title: 'Missed Sessions', value: summary.missed, tone: 'missed' },
+  ];
+
+  elements.adminUserSessionKpis.innerHTML = '';
+  kpis.forEach((metric) => {
+    const card = document.createElement('article');
+    card.className = `admin-user-kpi-card tone-${metric.tone}`;
+    card.innerHTML = `
+      <span>${escapeHtml(metric.title)}</span>
+      <strong>${escapeHtml(String(metric.value))}</strong>
+    `;
+    elements.adminUserSessionKpis.appendChild(card);
+  });
+
+  elements.adminUserSessionList.innerHTML = '';
+  if (!summary.bookings.length) {
+    elements.adminUserSessionListEmpty.hidden = false;
+    return;
+  }
+
+  elements.adminUserSessionListEmpty.hidden = true;
+  [...summary.bookings]
+    .sort((a, b) => `${b.bookingDate}T${b.bookingTime}`.localeCompare(`${a.bookingDate}T${a.bookingTime}`))
+    .forEach((booking) => {
+      const status = String(booking?.status || '').toLowerCase();
+      const derivedStatus =
+        isBookingMissed(booking) && !['completed', 'cancelled', 'missed'].includes(status)
+          ? 'missed'
+          : status || 'pending';
+      const row = document.createElement('article');
+      row.className = 'admin-user-session-row';
+      row.innerHTML = `
+        <div>
+          <h4>${escapeHtml(booking?.serviceName || 'Session')}</h4>
+          <p>${escapeHtml(formatAdminBookingDateTime(booking?.bookingDate, booking?.bookingTime).replace(/\n/g, ' • '))}</p>
+        </div>
+        <div class="admin-user-session-badges">
+          <span class="status-chip status-${escapeHtml(derivedStatus)}">${escapeHtml(derivedStatus)}</span>
+          <span class="status-chip payment-${escapeHtml(String(booking?.paymentStatus || 'unpaid').toLowerCase())}">${escapeHtml(
+            String(booking?.paymentStatus || 'unpaid')
+          )}</span>
+        </div>
+      `;
+      elements.adminUserSessionList.appendChild(row);
+    });
 }
 
 function renderUserRows(bookings) {
@@ -3795,6 +4448,9 @@ function renderUserRows(bookings) {
 
     const canEdit = !['completed', 'cancelled'].includes(String(row.status || '').toLowerCase());
     const canCancel = row.status !== 'cancelled';
+    if ((row.paymentStatus || 'unpaid') === 'paid') {
+      actions.append(createActionButton('Invoice', () => openBookingInvoice(row.booking?.id || row.id)));
+    }
     if (canEdit) {
       actions.append(
         createActionButton(row.isGroupedHydrogen ? 'Edit Package' : 'Edit', () => {
@@ -4048,6 +4704,9 @@ function renderAdminRows(bookings) {
     if ((booking.paymentStatus || 'unpaid') !== 'paid' && booking.status !== 'cancelled') {
       actions.append(createActionButton('Copy Payment Link', () => copyBookingPaymentLink(booking.id)));
     }
+    if ((booking.paymentStatus || 'unpaid') === 'paid') {
+      actions.append(createActionButton('Invoice', () => openBookingInvoice(booking.id)));
+    }
 
     actions.append(
       createActionButton('Confirm', () => changeStatus(booking.id, 'confirmed')),
@@ -4066,87 +4725,107 @@ function renderAdminMembershipOrders() {
   if (!elements.adminMembershipOrdersList || !elements.adminMembershipEmptyState) return;
 
   elements.adminMembershipOrdersList.innerHTML = '';
-  const paidOrders = (state.adminMembershipOrders || []).filter(
-    (order) => String(order?.status || '').trim().toLowerCase() === 'paid'
-  );
+  const paidOrders = getFilteredAdminMembershipOrders();
   if (!paidOrders.length) {
     elements.adminMembershipEmptyState.hidden = false;
     return;
   }
 
   elements.adminMembershipEmptyState.hidden = true;
-  for (const order of paidOrders) {
-    const card = document.createElement('article');
-    card.className = 'admin-membership-card';
-    const amountInr = Math.round(Number(order.amountPaise || 0) / 100);
-    const memberDetails = Array.isArray(order.memberDetails) ? order.memberDetails : [];
-    card.innerHTML = `
-      <div class="admin-membership-head">
+  
+  // Sort by most recent first
+  const sorted = [...paidOrders].sort((a, b) => {
+    const dateA = new Date(a.paidAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.paidAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+
+  for (const order of sorted) {
+    const circle = document.createElement('button');
+    circle.type = 'button';
+    circle.className = 'admin-membership-circle';
+    circle.innerHTML = `
+      <div class="admin-membership-circle-name">${escapeHtml(order.userName || 'User')}</div>
+      <div class="admin-membership-circle-id">ID: ${escapeHtml(String(order.userId || '-').slice(0, 8))}</div>
+    `;
+    circle.addEventListener('click', () => {
+      openMembershipDetailsModal(order);
+    });
+    elements.adminMembershipOrdersList.appendChild(circle);
+  }
+}
+
+function openMembershipDetailsModal(order) {
+  if (!elements.membershipDialog) return;
+  
+  const amountInr = Math.round(Number(order.amountPaise || 0) / 100);
+  const memberDetails = Array.isArray(order.memberDetails) ? order.memberDetails : [];
+  
+  if (elements.membershipDialogTitle) {
+    elements.membershipDialogTitle.textContent = `${escapeHtml(order.userName || 'Membership')} Details`;
+  }
+
+  const content = document.querySelector('.membership-dialog-content');
+  if (content) {
+    content.innerHTML = `
+      <div class="admin-membership-modal-head">
         <div>
           <h3>${escapeHtml(getMembershipPlanDisplayName(order.planId))}</h3>
-          <p>${escapeHtml(order.userName || '-')} • ${escapeHtml(order.userEmail || '-')} • ${escapeHtml(order.userMobile || '-')}</p>
+          <p>${escapeHtml(order.userEmail || '-')} • ${escapeHtml(order.userMobile || '-')}</p>
         </div>
         <span class="status-chip payment-${escapeHtml(String(order.status || 'created').toLowerCase())}">${escapeHtml(
-      String(order.status || 'created')
-    )}</span>
+          String(order.status || 'created')
+        )}</span>
       </div>
-      <div class="admin-membership-meta">
-        <div class="admin-membership-meta-item">
-          <strong>People Count</strong>
+      <div class="admin-membership-modal-meta">
+        <div>
+          <strong>People</strong>
           <span>${escapeHtml(String(order.peopleCount || 0))}</span>
         </div>
-        <div class="admin-membership-meta-item">
+        <div>
           <strong>Amount</strong>
           <span>Rs. ${amountInr.toLocaleString('en-IN')}</span>
         </div>
-        <div class="admin-membership-meta-item">
+        <div>
           <strong>Created</strong>
           <span>${escapeHtml(formatDateOnly(order.createdAt))}</span>
         </div>
-        <div class="admin-membership-meta-item">
-          <strong>Paid At</strong>
+        <div>
+          <strong>Paid</strong>
           <span>${order.paidAt ? escapeHtml(formatDateOnly(order.paidAt)) : '-'}</span>
         </div>
       </div>
-      <div class="admin-membership-members">
-        <h4>Covered Person Details</h4>
+      <div class="admin-membership-modal-members">
+        <h4>Covered Persons</h4>
+        ${
+          !memberDetails.length
+            ? '<p class="empty-state">No person details saved.</p>'
+            : memberDetails
+                .map(
+                  (member, idx) => `
+          <div class="admin-member-detail">
+            <div><strong>Person ${idx + 1}</strong></div>
+            <div><strong>Name:</strong> ${escapeHtml(member?.name || '-')}</div>
+            <div><strong>Place:</strong> ${escapeHtml(member?.place || '-')}</div>
+            <div><strong>Email:</strong> ${escapeHtml(member?.email || '-')}</div>
+            <div><strong>Contact:</strong> ${escapeHtml(member?.contactNumber || '-')}</div>
+          </div>
+        `
+                )
+                .join('')
+        }
       </div>
     `;
-
-    const membersWrap = card.querySelector('.admin-membership-members');
-    if (!memberDetails.length) {
-      const empty = document.createElement('p');
-      empty.className = 'empty-state';
-      empty.textContent = 'No person details saved for this membership order.';
-      membersWrap.appendChild(empty);
-    } else {
-      memberDetails.forEach((member, index) => {
-        const row = document.createElement('div');
-        row.className = 'admin-member-grid';
-        row.innerHTML = `
-          <div class="admin-member-field">
-            <strong>Person</strong>
-            <span>${index + 1}</span>
-          </div>
-          <div class="admin-member-field">
-            <strong>Name</strong>
-            <span>${escapeHtml(member?.name || '-')}</span>
-          </div>
-          <div class="admin-member-field">
-            <strong>Place</strong>
-            <span>${escapeHtml(member?.place || '-')}</span>
-          </div>
-          <div class="admin-member-field">
-            <strong>Email / Contact</strong>
-            <span>${escapeHtml(member?.email || '-')}<br />${escapeHtml(member?.contactNumber || '-')}</span>
-          </div>
-        `;
-        membersWrap.appendChild(row);
-      });
-    }
-
-    elements.adminMembershipOrdersList.appendChild(card);
   }
+
+  const actions = document.querySelector('.membership-dialog-actions');
+  if (actions) {
+    actions.innerHTML = '';
+    const invoiceBtn = createActionButton('View Invoice', () => openMembershipInvoice(order.orderId));
+    actions.appendChild(invoiceBtn);
+  }
+
+  elements.membershipDialog.showModal();
 }
 
 function renderAdminDiscountPhones() {
@@ -5054,6 +5733,34 @@ function copyTextToClipboard(value) {
   }
 }
 
+function openPortalDocument(url) {
+  const targetUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
+  const popup = window.open(targetUrl, '_blank', 'noopener');
+  if (!popup) {
+    window.location.href = targetUrl;
+  }
+}
+
+async function openBookingInvoice(bookingId) {
+  const id = Number(bookingId);
+  if (!Number.isInteger(id)) return;
+  const result = await api(`/api/bookings/${encodeURIComponent(id)}/invoice-link`);
+  if (!result?.invoiceUrl) {
+    throw new Error('Invoice link could not be generated. Please refresh the page and try again.');
+  }
+  openPortalDocument(result.invoiceUrl);
+}
+
+async function openMembershipInvoice(orderId) {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) return;
+  const result = await api(`/api/membership-orders/${encodeURIComponent(normalizedOrderId)}/invoice-link`);
+  if (!result?.invoiceUrl) {
+    throw new Error('Invoice link could not be generated. Please refresh the page and try again.');
+  }
+  openPortalDocument(result.invoiceUrl);
+}
+
 function getMembershipPlanDisplayName(planId) {
   const key = String(planId || '').trim();
   const labelMap = {
@@ -5174,3 +5881,4 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
+

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Booking Management Portal</title>
     <link rel="icon" type="image/png" href="assets/brand/H2_icon.png" />
-    <link rel="stylesheet" href="styles.css?v=20260312-1" />
+    <link rel="stylesheet" href="styles.css?v=20260404-2" />
   </head>
   <body>
     <div class="background-shape shape-a"></div>
@@ -95,23 +95,15 @@
         </div>
       </section>
 
-      <section class="stats-grid app-only admin-only" aria-label="Booking summary" hidden>
-        <article class="stat-card">
-          <h2>Total</h2>
+      <section class="stats-grid admin-stats-grid app-only admin-only" aria-label="Booking summary" hidden>
+        <button id="adminStatTotal" class="stat-card" type="button">
+          <h2>Total Bookings Today</h2>
           <p id="totalCount">0</p>
-        </article>
-        <article class="stat-card">
-          <h2>Confirmed</h2>
-          <p id="confirmedCount">0</p>
-        </article>
-        <article class="stat-card">
-          <h2>Pending</h2>
-          <p id="pendingCount">0</p>
-        </article>
-        <article class="stat-card">
-          <h2>Cancelled</h2>
-          <p id="cancelledCount">0</p>
-        </article>
+        </button>
+        <button id="adminHistoryCard" class="stat-card" type="button">
+          <h2>History of All Bookings</h2>
+          <p id="historyCount">0</p>
+        </button>
       </section>
 
       <section id="userTabNav" class="panel app-only user-only user-tab-nav" aria-label="User navigation" hidden>
@@ -173,6 +165,23 @@
               </div>
               <p id="membershipUsageNote" class="membership-copy"></p>
             </div>
+            <div class="membership-calendar-card" aria-label="Monthly calendar">
+              <div class="membership-calendar-head">
+                <h4>Calendar</h4>
+                <span id="membershipCalendarMonth" class="membership-calendar-month"></span>
+              </div>
+              <div class="membership-calendar-weekdays">
+                <span>Sun</span>
+                <span>Mon</span>
+                <span>Tue</span>
+                <span>Wed</span>
+                <span>Thu</span>
+                <span>Fri</span>
+                <span>Sat</span>
+              </div>
+              <div id="membershipCalendarGrid" class="membership-calendar-grid"></div>
+              <div id="membershipCalendarDetails" class="membership-calendar-details"></div>
+            </div>
             <div class="membership-highlight-card">
               <span class="membership-highlight-kicker">Upcoming</span>
               <h4 id="membershipNextSessionTitle">No sessions scheduled</h4>
@@ -187,13 +196,13 @@
               <h3>Structured membership plans built around hydrogen therapy, diagnostics, and long-term care.</h3>
               <p class="membership-copy">
                 Choose the membership that fits your life. Every plan includes hydrogen access, diagnostics support,
-                and member-only wellness benefits across the 90-day membership period.
+                and member-only wellness benefits across the 1-year membership period.
               </p>
             </div>
             <div class="membership-hero-panel">
               <div class="membership-hero-stat">
                 <strong>H2 Sessions</strong>
-                <span>Included in every 3-month plan</span>
+                <span>Included in every 1-year plan</span>
               </div>
               <div class="membership-hero-stat">
                 <strong>Diagnostics</strong>
@@ -238,6 +247,15 @@
         </div>
         <div id="adminClientMeta" class="admin-client-meta admin-only" hidden></div>
         <p id="adminCustomerMessage" class="membership-copy admin-only" hidden></p>
+        <div id="experienceCard" class="experience-card user-only">
+          <div class="experience-card-left">
+            <div class="experience-card-title">Experience Session</div>
+            <div class="experience-card-desc">30 min hydrogen therapy + consultation</div>
+          </div>
+          <div class="experience-card-right">
+            <button id="experienceBookBtn" class="experience-card-btn" type="button">Book</button>
+          </div>
+        </div>
         <div id="serviceGrid" class="doctor-grid"></div>
         <p id="serviceEmpty" class="empty-state" hidden>No services configured.</p>
         <p id="servicePageNote" class="service-page-note user-only">
@@ -311,9 +329,24 @@
         </div>
       </section>
 
-      <section class="panel app-only admin-only" aria-label="Admin bookings" hidden>
+      <section class="panel app-only admin-only admin-user-session-panel" aria-label="Admin bookings" hidden>
         <div class="panel-head">
-          <h2>All User Bookings</h2>
+          <h2>User Sessions</h2>
+        </div>
+        <div class="admin-section-toolbar">
+          <p class="membership-copy">Search any user and open their session details from the cards below.</p>
+          <label class="admin-inline-search">
+            <span>Search</span>
+            <input id="adminSessionSearch" type="text" placeholder="Search users with id, name, email, phone number" />
+          </label>
+        </div>
+        <div id="adminUserCards" class="admin-user-grid"></div>
+        <p id="adminUserCardsEmpty" class="empty-state" hidden>No users found.</p>
+      </section>
+
+      <section id="adminHistorySection" class="panel app-only admin-only" aria-label="Admin bookings">
+        <div class="panel-head">
+          <h2 id="adminTableTitle">Today's Bookings</h2>
         </div>
         <div class="table-wrap">
           <table>
@@ -332,16 +365,23 @@
           </table>
           <p id="adminEmptyState" class="empty-state">No bookings found.</p>
         </div>
+        <div id="adminHistoryToggleBtnWrap" style="text-align: center; margin-top: 1rem;">
+          <button id="adminHistoryToggleBtn" class="btn btn-secondary" type="button" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">Hide History</button>
+        </div>
       </section>
 
-      <section class="panel app-only admin-only" aria-label="Membership purchases" hidden>
+      <section class="panel app-only admin-only admin-membership-panel" aria-label="Membership purchases" hidden>
         <div class="panel-head">
           <h2>Paid Memberships</h2>
         </div>
-        <p class="membership-copy">
-          Only paid memberships and their covered person details are listed here.
-        </p>
-        <div id="adminMembershipOrdersList" class="admin-membership-list"></div>
+        <div class="admin-section-toolbar">
+          <p class="membership-copy">Click any member card to view full details, invoices, and covered members.</p>
+          <label class="admin-inline-search">
+            <span>Search</span>
+            <input id="adminMembershipSearch" type="text" placeholder="Search users with id, username, email, phone number" />
+          </label>
+        </div>
+        <div id="adminMembershipOrdersList" class="admin-membership-circles"></div>
         <p id="adminMembershipEmptyState" class="empty-state">No paid memberships found.</p>
       </section>
 
@@ -461,6 +501,7 @@
           <label>
             Service
             <select id="serviceName" required></select>
+            <div id="experienceServiceLabel" class="experience-service-label" hidden>Hydrogen Therapy</div>
           </label>
           <label>
             Date
@@ -530,27 +571,36 @@
       </form>
     </dialog>
 
+    <dialog id="adminUserSessionDialog" class="profile-dialog">
+      <div class="admin-user-dialog">
+        <div class="dialog-head">
+          <div>
+            <h2 id="adminUserSessionTitle">User Sessions</h2>
+            <p id="adminUserSessionMeta" class="membership-copy"></p>
+          </div>
+          <button id="adminUserSessionCloseBtn" class="icon-btn" type="button" aria-label="Close">×</button>
+        </div>
+        <div id="adminUserSessionKpis" class="admin-user-kpi-grid"></div>
+        <div class="admin-user-session-list-wrap">
+          <div class="panel-head admin-user-session-list-head">
+            <h3>Session History</h3>
+          </div>
+          <div id="adminUserSessionList" class="admin-user-session-list"></div>
+          <p id="adminUserSessionListEmpty" class="empty-state" hidden>No sessions found for this user.</p>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="membershipDialog" class="booking-dialog">
       <form id="membershipForm" method="dialog">
         <div class="dialog-head">
           <h2 id="membershipDialogTitle">Membership Details</h2>
           <button id="closeMembershipDialogBtn" class="icon-btn" type="button" aria-label="Close">×</button>
         </div>
-        <p id="membershipPlanSummary" class="membership-checkout-summary"></p>
-        <div class="coupon-entry">
-          <label>
-            Coupon Code
-            <div class="coupon-entry-row">
-              <input id="membershipCouponCode" type="text" placeholder="Enter coupon code" />
-              <button id="membershipApplyCouponBtn" class="btn btn-secondary" type="button">Apply</button>
-            </div>
-          </label>
-          <div id="membershipCouponPreview" class="coupon-preview" hidden></div>
-        </div>
-        <div id="membershipMembersGrid" class="membership-members-grid"></div>
+        <div class="membership-dialog-content"></div>
+        <div class="membership-dialog-actions"></div>
         <div class="dialog-actions">
-          <button class="btn btn-secondary" type="button" id="cancelMembershipBtn">Cancel</button>
-          <button class="btn btn-primary" type="submit">Continue to Payment</button>
+          <button class="btn btn-secondary" type="button" id="cancelMembershipBtn">Close</button>
         </div>
       </form>
     </dialog>
@@ -576,6 +626,6 @@
     </dialog>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
   </body>
 </html>

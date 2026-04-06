@@ -11,6 +11,7 @@ const nodemailer = require('nodemailer');
 const sgMail = require('@sendgrid/mail');
 const Razorpay = require('razorpay');
 const multer = require('multer');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 loadEnvFromFile(path.join(__dirname, '.env'));
 
@@ -35,6 +36,15 @@ const SENDGRID_API_KEY = normalizeEnvValue(process.env.SENDGRID_API_KEY);
 const SENDGRID_FROM_EMAIL = normalizeEnvValue(
   process.env.SENDGRID_FROM_EMAIL || process.env.SMTP_FROM || process.env.SMTP_USER || ''
 );
+const DEFAULT_INVOICE_SETTINGS = {
+  invoice_prefix: normalizeEnvValue(process.env.INVOICE_PREFIX || 'H2'),
+  business_name: normalizeEnvValue(process.env.INVOICE_BUSINESS_NAME || 'H2 House Of Health'),
+  business_address: normalizeEnvValue(process.env.INVOICE_BUSINESS_ADDRESS || ''),
+  business_phone: normalizeEnvValue(process.env.INVOICE_BUSINESS_PHONE || ''),
+  business_email: normalizeEnvValue(process.env.INVOICE_BUSINESS_EMAIL || SENDGRID_FROM_EMAIL || ''),
+  business_gstin: normalizeEnvValue(process.env.INVOICE_BUSINESS_GSTIN || ''),
+  footer_note: normalizeEnvValue(process.env.INVOICE_FOOTER_NOTE || 'This is a system-generated invoice.'),
+};
 const AVATAR_MAX_SIZE_BYTES = 10 * 1024 * 1024;
 const SEED_DEMO_DOCTORS = normalizeEnvValue(process.env.SEED_DEMO_DOCTORS || 'false').toLowerCase() === 'true';
 const SES_API_REGION = (
@@ -114,6 +124,13 @@ const SERVICE_CATALOG = [
     includes: '90 Hydrogen Sessions in 3 months',
     description:
       'Long-cycle intensive plan built for deep and sustained wellness transformation. Non-member pricing: Rs. 1,50,000.',
+  },
+  {
+    category: 'EXPERIENCE SESSION',
+    name: 'Experience Session',
+    priceInr: 4000,
+    includes: '30 min hydrogen therapy + consultation.',
+    description: 'Experience Session (Demo) for non-members.',
   },
   {
     category: 'MEMBERSHIP SERVICES',
@@ -260,7 +277,7 @@ const MEMBERSHIP_PLANS = [
     name: '1 Person Membership',
     peopleCount: 1,
     priceInr: 84000,
-    validityDays: 90,
+    validityDays: 365,
     h2SessionsIncluded: 16,
     perks:
       'Includes lab tests, oxidative stress marker test, radiology services, concierge primary care, and 16 H2 sessions.',
@@ -270,7 +287,7 @@ const MEMBERSHIP_PLANS = [
     name: '2 Person Membership',
     peopleCount: 2,
     priceInr: 160000,
-    validityDays: 90,
+    validityDays: 365,
     h2SessionsIncluded: 32,
     perks: '',
   },
@@ -279,7 +296,7 @@ const MEMBERSHIP_PLANS = [
     name: '4 Person Membership',
     peopleCount: 4,
     priceInr: 288000,
-    validityDays: 90,
+    validityDays: 365,
     h2SessionsIncluded: 64,
     perks: '',
   },
@@ -288,13 +305,13 @@ const MEMBERSHIP_PLANS = [
     name: 'Add Person',
     peopleCount: 1,
     priceInr: 78000,
-    validityDays: 90,
+    validityDays: 365,
     h2SessionsIncluded: 16,
     perks:
       'Add one more member to an existing plan with lab tests, oxidative stress marker test, radiology services, and hydrogen pricing benefits.',
   },
 ];
-const MEMBERSHIP_VALIDITY_DAYS = Number(MEMBERSHIP_PLANS.find((plan) => plan.id === 'h2_single')?.validityDays || 90);
+const MEMBERSHIP_VALIDITY_DAYS = Number(MEMBERSHIP_PLANS.find((plan) => plan.id === 'h2_single')?.validityDays || 365);
 const app = express();
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -308,6 +325,7 @@ app.use(cors());
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const uploadsDir = path.resolve(process.env.UPLOADS_DIR || path.join(__dirname, 'uploads'));
 const dbPath = path.join(dataDir, 'booking.db');
+const invoiceLetterheadPath = path.resolve(process.env.INVOICE_LETTERHEAD_PATH || path.join(__dirname, 'assets', 'brand', 'h2-letterhead.pdf'));
 
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -1508,6 +1526,68 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
   res.json({ users });
 });
 
+app.get('/api/admin/invoice-settings', requireAuth, requireAdmin, (_req, res) => {
+  const settings = getInvoiceSettings();
+  res.json({
+    settings: {
+      invoicePrefix: settings.invoicePrefix,
+      businessName: settings.businessName,
+      businessAddress: settings.businessAddress,
+      businessPhone: settings.businessPhone,
+      businessEmail: settings.businessEmail,
+      businessGstin: settings.businessGstin,
+      footerNote: settings.footerNote,
+    },
+  });
+});
+
+app.put('/api/admin/invoice-settings', requireAuth, requireAdmin, (req, res) => {
+  const nextSettings = {
+    invoice_prefix: String(req.body?.invoicePrefix || '').trim(),
+    business_name: String(req.body?.businessName || '').trim(),
+    business_address: String(req.body?.businessAddress || '').trim(),
+    business_phone: String(req.body?.businessPhone || '').trim(),
+    business_email: String(req.body?.businessEmail || '').trim(),
+    business_gstin: String(req.body?.businessGstin || '').trim(),
+    footer_note: String(req.body?.footerNote || '').trim(),
+  };
+
+  if (!nextSettings.business_name) {
+    return res.status(400).json({ message: 'Business name is required.' });
+  }
+  if (nextSettings.business_email && !isValidEmail(nextSettings.business_email)) {
+    return res.status(400).json({ message: 'Business email must be a valid email address.' });
+  }
+
+  const upsert = db.prepare(
+    `INSERT INTO app_settings (setting_key, setting_value, updated_at)
+     VALUES (?, ?, datetime('now'))
+     ON CONFLICT(setting_key) DO UPDATE SET
+       setting_value = excluded.setting_value,
+       updated_at = datetime('now')`
+  );
+  const txn = db.transaction((entries) => {
+    for (const [key, value] of Object.entries(entries)) {
+      upsert.run(key, value);
+    }
+  });
+  txn(nextSettings);
+
+  const settings = getInvoiceSettings();
+  res.json({
+    message: 'Invoice settings updated.',
+    settings: {
+      invoicePrefix: settings.invoicePrefix,
+      businessName: settings.businessName,
+      businessAddress: settings.businessAddress,
+      businessPhone: settings.businessPhone,
+      businessEmail: settings.businessEmail,
+      businessGstin: settings.businessGstin,
+      footerNote: settings.footerNote,
+    },
+  });
+});
+
 app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const name = String(req.body?.name || '').trim();
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -1765,6 +1845,37 @@ app.get('/api/admin/membership-orders', requireAuth, requireAdmin, (_req, res) =
     });
 
   res.json({ orders });
+});
+
+app.get('/api/membership-orders/:orderId/invoice', requireAuth, async (req, res) => {
+  try {
+    const source = getMembershipInvoiceSource(req.params.orderId, req.user);
+    const pdfBytes = await renderInvoicePdf(source, source.invoiceRecord);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${source.fileName}"`);
+    return res.send(Buffer.from(pdfBytes));
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Membership invoice generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate membership invoice.' });
+  }
+});
+
+app.get('/api/membership-orders/:orderId/invoice-link', requireAuth, (req, res) => {
+  try {
+    const source = getMembershipInvoiceSource(req.params.orderId, req.user);
+    return res.json({
+      invoiceUrl: buildMembershipInvoiceLink(req, req.params.orderId, source.invoiceRecord.userId),
+    });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Membership invoice link generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate membership invoice link.' });
+  }
 });
 
 app.get('/api/admin/discount-phones', requireAuth, requireAdmin, (_req, res) => {
@@ -2198,6 +2309,47 @@ app.get('/api/bookings', requireAuth, (req, res) => {
   res.json({ bookings: rows.map(applyHoldMeta) });
 });
 
+app.get('/api/bookings/:bookingId/invoice', requireAuth, async (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isInteger(bookingId)) {
+    return res.status(400).json({ message: 'invalid booking id' });
+  }
+
+  try {
+    const source = getServiceInvoiceSource(bookingId, req.user);
+    const pdfBytes = await renderInvoicePdf(source, source.invoiceRecord);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${source.fileName}"`);
+    return res.send(Buffer.from(pdfBytes));
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Service invoice generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate invoice.' });
+  }
+});
+
+app.get('/api/bookings/:bookingId/invoice-link', requireAuth, (req, res) => {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isInteger(bookingId)) {
+    return res.status(400).json({ message: 'invalid booking id' });
+  }
+
+  try {
+    const source = getServiceInvoiceSource(bookingId, req.user);
+    return res.json({
+      invoiceUrl: buildBookingInvoiceLink(req, bookingId, source.invoiceRecord.userId),
+    });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Booking invoice link generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate invoice link.' });
+  }
+});
+
 app.get('/api/doctor/bookings', requireAuth, requireDoctor, (req, res) => {
   return res.status(410).json({ message: 'Doctor bookings are currently disabled.' });
 });
@@ -2449,6 +2601,21 @@ app.post('/api/hydrogen/create-order', requireAuth, async (req, res) => {
     });
 
     txn(normalizedSlots);
+
+    const firstGroupBooking = db
+      .prepare(
+        `SELECT id
+         FROM bookings
+         WHERE user_id = ? AND booking_group_id = ?
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .get(req.user.id, bookingGroupId);
+    db.prepare(
+      `INSERT OR REPLACE INTO service_payment_orders (
+        order_id, user_id, booking_id, booking_group_id, original_amount_paise, amount_paise, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
+    ).run(order.id, req.user.id, firstGroupBooking?.id || null, bookingGroupId, amountInPaise, amountInPaise);
 
     return res.json({
       keyId: RAZORPAY_KEY_ID,
@@ -3295,6 +3462,14 @@ app.post('/api/hydrogen/verify', requireAuth, (req, res) => {
        AND payment_order_id = ?`
   ).run(razorpayPaymentId, req.user.id, razorpayOrderId);
 
+  db.prepare(
+    `UPDATE service_payment_orders
+     SET status = 'paid',
+         payment_reference = ?,
+         paid_at = CASE WHEN paid_at IS NULL THEN datetime('now') ELSE paid_at END
+     WHERE order_id = ?`
+  ).run(razorpayPaymentId, razorpayOrderId);
+
   return res.json({ paid: true, bookingCount: bookings.length });
 });
 
@@ -3582,6 +3757,54 @@ app.get('/api/public/payments/booking', (req, res) => {
   });
 });
 
+app.get('/api/public/invoices/booking', async (req, res) => {
+  const access = verifyInvoiceAccessToken(req.query?.token);
+  if (!access || access.scope !== 'booking_invoice' || !Number.isInteger(access.bookingId) || !Number.isInteger(access.userId)) {
+    return res.status(400).json({ message: 'Invalid or expired invoice link' });
+  }
+
+  try {
+    const source = getServiceInvoiceSource(access.bookingId, { role: 'user', id: access.userId });
+    if (Number(source.invoiceRecord.userId) !== access.userId) {
+      return res.status(403).json({ message: 'forbidden' });
+    }
+    const pdfBytes = await renderInvoicePdf(source, source.invoiceRecord);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${source.fileName}"`);
+    return res.send(Buffer.from(pdfBytes));
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Public booking invoice generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate invoice.' });
+  }
+});
+
+app.get('/api/public/invoices/membership', async (req, res) => {
+  const access = verifyInvoiceAccessToken(req.query?.token);
+  if (!access || access.scope !== 'membership_invoice' || !access.orderId || !Number.isInteger(access.userId)) {
+    return res.status(400).json({ message: 'Invalid or expired invoice link' });
+  }
+
+  try {
+    const source = getMembershipInvoiceSource(access.orderId, { role: 'user', id: access.userId });
+    if (Number(source.invoiceRecord.userId) !== access.userId) {
+      return res.status(403).json({ message: 'forbidden' });
+    }
+    const pdfBytes = await renderInvoicePdf(source, source.invoiceRecord);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${source.fileName}"`);
+    return res.send(Buffer.from(pdfBytes));
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || 500);
+    if (statusCode >= 500) {
+      console.error('Public membership invoice generation failed:', error);
+    }
+    return res.status(statusCode).json({ message: error?.message || 'Unable to generate membership invoice.' });
+  }
+});
+
 app.post('/api/public/payments/create-order', async (req, res) => {
   if (!razorpay) {
     return res.status(503).json({ message: RAZORPAY_UNAVAILABLE_MESSAGE });
@@ -3688,6 +3911,12 @@ app.post('/api/public/payments/create-order', async (req, res) => {
       ).run(order.id, booking.id);
     }
 
+    db.prepare(
+      `INSERT OR REPLACE INTO service_payment_orders (
+        order_id, user_id, booking_id, booking_group_id, original_amount_paise, amount_paise, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
+    ).run(order.id, booking.userId, booking.id, booking.bookingGroupId || null, amountInPaise, amountInPaise);
+
     return res.json({
       keyId: RAZORPAY_KEY_ID,
       orderId: order.id,
@@ -3773,10 +4002,25 @@ app.post('/api/public/payments/verify', (req, res) => {
          AND payment_status <> 'paid'`
     ).run(razorpayOrderId, razorpayOrderId, razorpayPaymentId, razorpayPaymentId, booking.bookingGroupId);
 
+    db.prepare(
+      `UPDATE service_payment_orders
+       SET status = 'paid',
+           payment_reference = ?,
+           paid_at = CASE WHEN paid_at IS NULL THEN datetime('now') ELSE paid_at END
+       WHERE order_id = ?`
+    ).run(razorpayPaymentId, razorpayOrderId);
+
     return res.json({ bookingId: access.bookingId, paid: true, bookingCount: groupBookings.length });
   }
 
   markBookingPaid(access.bookingId, razorpayOrderId, razorpayPaymentId);
+  db.prepare(
+    `UPDATE service_payment_orders
+     SET status = 'paid',
+         payment_reference = ?,
+         paid_at = CASE WHEN paid_at IS NULL THEN datetime('now') ELSE paid_at END
+     WHERE order_id = ?`
+  ).run(razorpayPaymentId, razorpayOrderId);
   return res.json({ bookingId: access.bookingId, paid: true });
 });
 
@@ -4034,6 +4278,12 @@ app.post('/api/payments/create-order', requireAuth, async (req, res) => {
       ).run(order.id, booking.id);
     }
 
+    db.prepare(
+      `INSERT OR REPLACE INTO service_payment_orders (
+        order_id, user_id, booking_id, booking_group_id, original_amount_paise, amount_paise, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
+    ).run(order.id, booking.userId, booking.id, booking.bookingGroupId || null, amountInPaise, amountInPaise);
+
     return res.json({
       keyId: RAZORPAY_KEY_ID,
       orderId: order.id,
@@ -4123,10 +4373,25 @@ app.post('/api/payments/verify', requireAuth, (req, res) => {
          AND payment_status <> 'paid'`
     ).run(razorpayOrderId, razorpayOrderId, razorpayPaymentId, razorpayPaymentId, booking.bookingGroupId);
 
+    db.prepare(
+      `UPDATE service_payment_orders
+       SET status = 'paid',
+           payment_reference = ?,
+           paid_at = CASE WHEN paid_at IS NULL THEN datetime('now') ELSE paid_at END
+       WHERE order_id = ?`
+    ).run(razorpayPaymentId, razorpayOrderId);
+
     return res.json({ bookingId, paid: true, bookingCount: groupBookings.length });
   }
 
   markBookingPaid(bookingId, razorpayOrderId, razorpayPaymentId);
+  db.prepare(
+    `UPDATE service_payment_orders
+     SET status = 'paid',
+         payment_reference = ?,
+         paid_at = CASE WHEN paid_at IS NULL THEN datetime('now') ELSE paid_at END
+     WHERE order_id = ?`
+  ).run(razorpayPaymentId, razorpayOrderId);
   return res.json({ bookingId, paid: true });
 });
 
@@ -4311,6 +4576,7 @@ app.get(/.*/, (_req, res) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server listening on port ${PORT}`);
+  console.log(`Open: http://localhost:${PORT}`);
   if (SENDGRID_API_KEY && SENDGRID_FROM_EMAIL) {
     console.log(`SendGrid OTP mailer configured with sender ${SENDGRID_FROM_EMAIL}`);
   } else {
@@ -4697,6 +4963,22 @@ function createPaymentAccessToken(bookingId, userId) {
   );
 }
 
+function createInvoiceAccessToken(payload) {
+  const scope = String(payload?.scope || '').trim();
+  const userId = Number(payload?.userId);
+  if (!scope || !Number.isInteger(userId)) return '';
+
+  const tokenPayload = { scope, userId };
+  if (scope === 'booking_invoice') {
+    tokenPayload.bookingId = Number(payload.bookingId);
+  }
+  if (scope === 'membership_invoice') {
+    tokenPayload.orderId = String(payload.orderId || '').trim();
+  }
+
+  return jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '180d' });
+}
+
 function verifyPaymentAccessToken(token) {
   try {
     const payload = jwt.verify(String(token || ''), JWT_SECRET);
@@ -4704,6 +4986,22 @@ function verifyPaymentAccessToken(token) {
     return {
       bookingId: Number(payload.bookingId),
       userId: Number(payload.userId),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function verifyInvoiceAccessToken(token) {
+  try {
+    const payload = jwt.verify(String(token || ''), JWT_SECRET);
+    const scope = String(payload?.scope || '').trim();
+    if (!['booking_invoice', 'membership_invoice'].includes(scope)) return null;
+    return {
+      scope,
+      userId: Number(payload.userId),
+      bookingId: Number(payload.bookingId),
+      orderId: String(payload.orderId || '').trim(),
     };
   } catch {
     return null;
@@ -4719,6 +5017,16 @@ function buildBookingPaymentLink(req, bookingId, userId) {
   return `${getRequestOrigin(req)}/payment.html?token=${encodeURIComponent(token)}`;
 }
 
+function buildBookingInvoiceLink(req, bookingId, userId) {
+  const token = createInvoiceAccessToken({ scope: 'booking_invoice', bookingId, userId });
+  return `${getRequestOrigin(req)}/api/public/invoices/booking?token=${encodeURIComponent(token)}`;
+}
+
+function buildMembershipInvoiceLink(req, orderId, userId) {
+  const token = createInvoiceAccessToken({ scope: 'membership_invoice', orderId, userId });
+  return `${getRequestOrigin(req)}/api/public/invoices/membership?token=${encodeURIComponent(token)}`;
+}
+
 function buildRazorpayReceipt(prefix, identifier = '') {
   const safePrefix = String(prefix || 'ord')
     .toLowerCase()
@@ -4730,6 +5038,538 @@ function buildRazorpayReceipt(prefix, identifier = '') {
     .slice(-12);
   const stamp = Date.now().toString(36);
   return [safePrefix, safeIdentifier, stamp].filter(Boolean).join('_').slice(0, 40);
+}
+
+function formatInvoiceDate(value) {
+  const parsed = parseSqliteDateToUtcMs(value);
+  if (Number.isNaN(parsed)) return '-';
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(parsed));
+}
+
+function formatInvoiceDateTime(value) {
+  const parsed = parseSqliteDateToUtcMs(value);
+  if (Number.isNaN(parsed)) return '-';
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(parsed));
+}
+
+function formatInvoiceBookingSlot(dateISO, time24) {
+  const date = String(dateISO || '').trim();
+  const time = String(time24 || '').trim();
+  if (!date && !time) return '-';
+  return [date, time].filter(Boolean).join(' ');
+}
+
+function formatInrFromPaise(amountPaise) {
+  const amount = Number(amountPaise || 0) / 100;
+  return `Rs. ${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function getAppSettingsMap() {
+  const rows = hasTable('app_settings')
+    ? db.prepare('SELECT setting_key AS settingKey, setting_value AS settingValue FROM app_settings').all()
+    : [];
+  const settings = { ...DEFAULT_INVOICE_SETTINGS };
+  for (const row of rows) {
+    const key = String(row.settingKey || '').trim();
+    if (!key) continue;
+    settings[key] = String(row.settingValue || '').trim();
+  }
+  return settings;
+}
+
+function getInvoiceSettings() {
+  const settings = getAppSettingsMap();
+  return {
+    invoicePrefix: settings.invoice_prefix || DEFAULT_INVOICE_SETTINGS.invoice_prefix,
+    businessName: settings.business_name || DEFAULT_INVOICE_SETTINGS.business_name,
+    businessAddress: settings.business_address || DEFAULT_INVOICE_SETTINGS.business_address,
+    businessPhone: settings.business_phone || DEFAULT_INVOICE_SETTINGS.business_phone,
+    businessEmail: settings.business_email || DEFAULT_INVOICE_SETTINGS.business_email,
+    businessGstin: settings.business_gstin || DEFAULT_INVOICE_SETTINGS.business_gstin,
+    footerNote: settings.footer_note || DEFAULT_INVOICE_SETTINGS.footer_note,
+  };
+}
+
+function sanitizeInvoiceFileName(value) {
+  return String(value || 'invoice')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'invoice';
+}
+
+function getOrCreateInvoiceRecord({
+  contextType,
+  contextRef,
+  userId,
+  paymentOrderId = '',
+  paymentReference = '',
+  totalAmountPaise = 0,
+  currency = 'INR',
+  metadata = {},
+}) {
+  const normalizedType = String(contextType || '').trim();
+  const normalizedRef = String(contextRef || '').trim();
+  if (!normalizedType || !normalizedRef) {
+    throw new Error('Invoice context is required.');
+  }
+
+  const metadataJson = JSON.stringify(metadata || {});
+  const existing = db
+    .prepare(
+      `SELECT id, invoice_number AS invoiceNumber, context_type AS contextType, context_ref AS contextRef,
+              user_id AS userId, payment_order_id AS paymentOrderId, payment_reference AS paymentReference,
+              total_amount_paise AS totalAmountPaise, currency, issued_at AS issuedAt, metadata_json AS metadataJson
+       FROM invoices
+       WHERE context_type = ? AND context_ref = ?`
+    )
+    .get(normalizedType, normalizedRef);
+
+  if (existing) {
+    db.prepare(
+      `UPDATE invoices
+       SET user_id = ?,
+           payment_order_id = ?,
+           payment_reference = ?,
+           total_amount_paise = ?,
+           currency = ?,
+           metadata_json = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(
+      Number(userId || 0) || null,
+      String(paymentOrderId || ''),
+      String(paymentReference || ''),
+      Number(totalAmountPaise || 0),
+      String(currency || 'INR') || 'INR',
+      metadataJson,
+      existing.id
+    );
+
+    return db
+      .prepare(
+        `SELECT id, invoice_number AS invoiceNumber, context_type AS contextType, context_ref AS contextRef,
+                user_id AS userId, payment_order_id AS paymentOrderId, payment_reference AS paymentReference,
+                total_amount_paise AS totalAmountPaise, currency, issued_at AS issuedAt, metadata_json AS metadataJson
+         FROM invoices
+         WHERE id = ?`
+      )
+      .get(existing.id);
+  }
+
+  const result = db.prepare(
+    `INSERT INTO invoices (
+      invoice_number, context_type, context_ref, user_id, payment_order_id, payment_reference,
+      total_amount_paise, currency, metadata_json, issued_at, created_at, updated_at
+    ) VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`
+  ).run(
+    normalizedType,
+    normalizedRef,
+    Number(userId || 0) || null,
+    String(paymentOrderId || ''),
+    String(paymentReference || ''),
+    Number(totalAmountPaise || 0),
+    String(currency || 'INR') || 'INR',
+    metadataJson
+  );
+
+  const invoiceId = Number(result.lastInsertRowid);
+  const invoiceSettings = getInvoiceSettings();
+  const invoicePrefix = String(invoiceSettings.invoicePrefix || 'H2').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'H2';
+  const invoiceNumber = `${invoicePrefix}-${new Date().getFullYear()}-${String(invoiceId).padStart(6, '0')}`;
+  db.prepare('UPDATE invoices SET invoice_number = ? WHERE id = ?').run(invoiceNumber, invoiceId);
+
+  return db
+    .prepare(
+      `SELECT id, invoice_number AS invoiceNumber, context_type AS contextType, context_ref AS contextRef,
+              user_id AS userId, payment_order_id AS paymentOrderId, payment_reference AS paymentReference,
+              total_amount_paise AS totalAmountPaise, currency, issued_at AS issuedAt, metadata_json AS metadataJson
+       FROM invoices
+       WHERE id = ?`
+    )
+    .get(invoiceId);
+}
+
+function buildInvoiceBusinessLines() {
+  const invoiceSettings = getInvoiceSettings();
+  return [
+    `GSTIN: ${invoiceSettings.businessGstin || ''}`,
+  ].filter(Boolean);
+}
+
+function buildInvoicePdfModel(source, invoiceRecord) {
+  const invoiceSettings = getInvoiceSettings();
+  const customer = source.customer || {};
+  const payment = source.payment || {};
+  const items = Array.isArray(source.items) ? source.items : [];
+  const subtotalAmountPaise = Number(source.subtotalAmountPaise ?? source.totalAmountPaise ?? 0);
+  const discountAmountPaise = Number(source.discountAmountPaise || 0);
+  const totalAmountPaise = Number(source.totalAmountPaise || 0);
+
+  return {
+    invoiceNumber: invoiceRecord.invoiceNumber,
+    invoiceDate: formatInvoiceDate(invoiceRecord.issuedAt || source.issuedAt),
+    invoiceDateTime: formatInvoiceDateTime(invoiceRecord.issuedAt || source.issuedAt),
+    invoiceTitle: String(source.title || 'Tax Invoice'),
+    businessLines: buildInvoiceBusinessLines(),
+    customerLines: [
+      customer.name ? `Name: ${customer.name}` : '',
+      customer.email ? `Email: ${customer.email}` : '',
+      customer.phone ? `Phone: ${customer.phone}` : '',
+    ].filter(Boolean),
+    paymentLines: [
+      payment.orderId ? `Order ID: ${payment.orderId}` : '',
+      payment.reference ? `Payment Ref: ${payment.reference}` : '',
+      payment.paidAt ? `Booked on: ${formatInvoiceDateTime(payment.paidAt)}` : '',
+    ].filter(Boolean),
+    items: items.map((item) => ({
+      label: String(item.label || '').trim() || 'Service',
+      description: String(item.description || '').trim(),
+      amountText: formatInrFromPaise(item.amountPaise || 0),
+    })),
+    subtotalText: formatInrFromPaise(subtotalAmountPaise),
+    discountText: formatInrFromPaise(discountAmountPaise),
+    totalText: formatInrFromPaise(totalAmountPaise),
+    showDiscount: discountAmountPaise > 0,
+    footerLines: [
+      String(source.footerNote || invoiceSettings.footerNote || DEFAULT_INVOICE_SETTINGS.footer_note).trim(),
+      'Generated by H2 House Of Health portal.',
+    ],
+  };
+}
+
+async function renderInvoicePdf(source, invoiceRecord) {
+  const templateBytes = fs.readFileSync(invoiceLetterheadPath);
+  const pdfDoc = await PDFDocument.load(templateBytes);
+  pdfDoc.setTitle('Invoice');
+  pdfDoc.setSubject('Invoice');
+  pdfDoc.setProducer('H2 House Of Health');
+  pdfDoc.setCreator('H2 House Of Health');
+  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const page = pdfDoc.getPages()[0];
+  const { width, height } = page.getSize();
+  const left = 48;
+  const right = width - 48;
+  const black = rgb(0.1, 0.12, 0.15);
+  const muted = rgb(0.36, 0.39, 0.43);
+  const lineColor = rgb(0.84, 0.86, 0.89);
+  const model = buildInvoicePdfModel(source, invoiceRecord);
+
+  page.drawText(model.invoiceTitle, { x: left, y: height - 220, size: 20, font: helveticaBold, color: black });
+  page.drawText(`Invoice No: ${model.invoiceNumber}`, { x: left, y: height - 244, size: 10, font: helveticaBold, color: black });
+  page.drawText(`Invoice Date: ${model.invoiceDate}`, { x: left, y: height - 260, size: 10, font: helvetica, color: muted });
+
+  let y = height - 298;
+  for (const line of model.businessLines) {
+    page.drawText(line, { x: left, y, size: 10, font: helvetica, color: black });
+    y -= 14;
+  }
+
+  let customerY = height - 298;
+  page.drawText('Bill To', { x: 310, y: customerY, size: 11, font: helveticaBold, color: black });
+  customerY -= 16;
+  for (const line of model.customerLines) {
+    page.drawText(line, { x: 310, y: customerY, size: 10, font: helvetica, color: black });
+    customerY -= 14;
+  }
+
+  if (model.paymentLines.length) {
+    customerY -= 10;
+    page.drawText('Payment Details', { x: 310, y: customerY, size: 11, font: helveticaBold, color: black });
+    customerY -= 16;
+    for (const line of model.paymentLines) {
+      page.drawText(line, { x: 310, y: customerY, size: 10, font: helvetica, color: black });
+      customerY -= 14;
+    }
+  }
+
+  const tableTop = Math.min(y, customerY) - 16;
+  page.drawLine({ start: { x: left, y: tableTop }, end: { x: right, y: tableTop }, thickness: 1, color: lineColor });
+  page.drawText('Item', { x: left, y: tableTop - 14, size: 10, font: helveticaBold, color: black });
+  page.drawText('Amount', { x: right - 90, y: tableTop - 14, size: 10, font: helveticaBold, color: black });
+
+  let rowY = tableTop - 34;
+  for (const item of model.items) {
+    page.drawText(item.label.slice(0, 58), { x: left, y: rowY, size: 10, font: helveticaBold, color: black });
+    page.drawText(item.amountText, { x: right - 90, y: rowY, size: 10, font: helvetica, color: black });
+    rowY -= 13;
+    if (item.description) {
+      page.drawText(item.description.slice(0, 82), { x: left, y: rowY, size: 9, font: helvetica, color: muted });
+      rowY -= 18;
+    } else {
+      rowY -= 6;
+    }
+  }
+
+  const summaryTop = Math.max(rowY - 8, 150);
+  page.drawLine({ start: { x: left, y: summaryTop }, end: { x: right, y: summaryTop }, thickness: 1, color: lineColor });
+  page.drawText('Subtotal', { x: 360, y: summaryTop - 18, size: 10, font: helvetica, color: black });
+  page.drawText(model.subtotalText, { x: right - 90, y: summaryTop - 18, size: 10, font: helvetica, color: black });
+
+  let totalY = summaryTop - 36;
+  if (model.showDiscount) {
+    page.drawText('Discount', { x: 360, y: totalY, size: 10, font: helvetica, color: black });
+    page.drawText(`- ${model.discountText}`, { x: right - 90, y: totalY, size: 10, font: helvetica, color: black });
+    totalY -= 18;
+  }
+
+  page.drawText('Grand Total', { x: 360, y: totalY, size: 11, font: helveticaBold, color: black });
+  page.drawText(model.totalText, { x: right - 90, y: totalY, size: 11, font: helveticaBold, color: black });
+
+  let footerY = Math.max(totalY - 40, 90);
+  for (const line of model.footerLines) {
+    page.drawText(line.slice(0, 96), { x: left, y: footerY, size: 9, font: helvetica, color: muted });
+    footerY -= 14;
+  }
+
+  return pdfDoc.save();
+}
+
+function buildServiceInvoiceItems(bookings) {
+  return (Array.isArray(bookings) ? bookings : []).map((booking) => ({
+    label: booking.serviceName,
+    description: `Schedule: ${formatInvoiceBookingSlot(booking.bookingDate, booking.bookingTime)}`,
+    amountPaise: Number(booking.amountPaise || 0),
+  }));
+}
+
+function resolveServiceInvoiceOrder(orderId) {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) return null;
+
+  const cartOrder = db
+    .prepare(
+      `SELECT order_id AS orderId, user_id AS userId, original_amount_paise AS originalAmountPaise,
+              discount_amount_paise AS discountAmountPaise, coupon_code AS couponCode, amount_paise AS amountPaise,
+              status, payment_reference AS paymentReference, paid_at AS paidAt, created_at AS createdAt
+       FROM cart_payment_orders
+       WHERE order_id = ?`
+    )
+    .get(normalizedOrderId);
+  if (cartOrder) return { kind: 'cart', ...cartOrder };
+
+  const serviceOrder = db
+    .prepare(
+      `SELECT order_id AS orderId, user_id AS userId, booking_id AS bookingId, booking_group_id AS bookingGroupId,
+              original_amount_paise AS originalAmountPaise, amount_paise AS amountPaise, status,
+              payment_reference AS paymentReference, paid_at AS paidAt, created_at AS createdAt
+       FROM service_payment_orders
+       WHERE order_id = ?`
+    )
+    .get(normalizedOrderId);
+  if (serviceOrder) {
+    return {
+      kind: 'service',
+      ...serviceOrder,
+      discountAmountPaise: Math.max(0, Number(serviceOrder.originalAmountPaise || 0) - Number(serviceOrder.amountPaise || 0)),
+      couponCode: '',
+    };
+  }
+
+  return null;
+}
+
+function getServiceInvoiceSource(bookingId, actor) {
+  const booking = db
+    .prepare(
+      `SELECT id, user_id AS userId, booking_group_id AS bookingGroupId, service_name AS serviceName,
+              booking_date AS bookingDate, booking_time AS bookingTime, status, payment_status AS paymentStatus,
+              payment_order_id AS paymentOrderId, payment_reference AS paymentReference, paid_at AS paidAt
+       FROM bookings
+       WHERE id = ?`
+    )
+    .get(Number(bookingId));
+
+  if (!booking) {
+    const error = new Error('booking not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!canAccessBooking(actor, booking.userId)) {
+    const error = new Error('forbidden');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (String(booking.paymentStatus || '').toLowerCase() !== 'paid') {
+    const error = new Error('Invoice is available only for paid bookings.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const owner = getUserById(booking.userId);
+  const paymentOrder = resolveServiceInvoiceOrder(booking.paymentOrderId);
+  const relatedBookings = booking.paymentOrderId
+    ? db
+        .prepare(
+          `SELECT id, user_id AS userId, service_name AS serviceName, booking_date AS bookingDate, booking_time AS bookingTime,
+                  payment_order_id AS paymentOrderId, payment_reference AS paymentReference, paid_at AS paidAt
+           FROM bookings
+           WHERE user_id = ?
+             AND payment_order_id = ?
+             AND payment_status = 'paid'
+           ORDER BY booking_date, booking_time, id`
+        )
+        .all(booking.userId, booking.paymentOrderId)
+    : [booking];
+
+  const pricingUser = getUserProfileById(booking.userId) || owner || {};
+  const bookingsWithAmounts = relatedBookings.map((entry) => {
+    const service = getServiceByName(entry.serviceName);
+    return {
+      ...entry,
+      amountPaise: Math.round(Number(getEffectiveServicePriceInr(service, pricingUser) || 0) * 100),
+    };
+  });
+
+  const fallbackSubtotal = bookingsWithAmounts.reduce((sum, entry) => sum + Number(entry.amountPaise || 0), 0);
+  const originalAmountPaise = Number(paymentOrder?.originalAmountPaise ?? fallbackSubtotal);
+  const totalAmountPaise = Number(paymentOrder?.amountPaise ?? fallbackSubtotal);
+  const discountAmountPaise = Number(paymentOrder?.discountAmountPaise || Math.max(0, originalAmountPaise - totalAmountPaise));
+  const invoiceRecord = getOrCreateInvoiceRecord({
+    contextType: 'service_order',
+    contextRef: booking.paymentOrderId || `booking_${booking.id}`,
+    userId: booking.userId,
+    paymentOrderId: booking.paymentOrderId || '',
+    paymentReference: paymentOrder?.paymentReference || booking.paymentReference || '',
+    totalAmountPaise,
+    metadata: {
+      bookingIds: bookingsWithAmounts.map((entry) => entry.id),
+      orderKind: paymentOrder?.kind || 'fallback',
+    },
+  });
+
+  return {
+    invoiceRecord,
+    fileName: `invoice-${sanitizeInvoiceFileName(invoiceRecord.invoiceNumber)}.pdf`,
+    issuedAt: paymentOrder?.paidAt || booking.paidAt || invoiceRecord.issuedAt,
+    title: 'Billing Invoice',
+    customer: {
+      name: owner?.name || 'User',
+      email: owner?.email || '',
+      phone: owner?.mobile || '',
+    },
+    payment: {
+      orderId: booking.paymentOrderId || '',
+      reference: paymentOrder?.paymentReference || booking.paymentReference || '',
+      paidAt: paymentOrder?.paidAt || booking.paidAt || '',
+    },
+    items: buildServiceInvoiceItems(bookingsWithAmounts),
+    subtotalAmountPaise: originalAmountPaise,
+    discountAmountPaise,
+    totalAmountPaise,
+    footerNote:
+      paymentOrder?.couponCode
+        ? `Discount applied using coupon code ${paymentOrder.couponCode}.`
+        : 'Thank you for choosing H2 House Of Health.',
+  };
+}
+
+function getMembershipInvoiceSource(orderId, actor) {
+  const order = db
+    .prepare(
+      `SELECT mpo.order_id AS orderId, mpo.user_id AS userId, mpo.plan_id AS planId, mpo.people_count AS peopleCount,
+              mpo.member_details_json AS memberDetailsJson, mpo.original_amount_paise AS originalAmountPaise,
+              mpo.discount_amount_paise AS discountAmountPaise, mpo.coupon_code AS couponCode, mpo.amount_paise AS amountPaise,
+              mpo.status, mpo.payment_reference AS paymentReference, mpo.paid_at AS paidAt, mpo.created_at AS createdAt,
+              u.name AS userName, u.email AS userEmail, u.mobile AS userMobile
+       FROM membership_payment_orders mpo
+       JOIN users u ON u.id = mpo.user_id
+       WHERE mpo.order_id = ?`
+    )
+    .get(String(orderId || '').trim());
+
+  if (!order) {
+    const error = new Error('membership order not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (actor.role !== 'admin' && Number(actor.id) !== Number(order.userId)) {
+    const error = new Error('forbidden');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (String(order.status || '').toLowerCase() !== 'paid') {
+    const error = new Error('Invoice is available only for paid membership orders.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  let memberDetails = [];
+  try {
+    memberDetails = order.memberDetailsJson ? JSON.parse(order.memberDetailsJson) : [];
+  } catch {
+    memberDetails = [];
+  }
+
+  const plan = MEMBERSHIP_PLANS.find((item) => item.id === String(order.planId || '').trim());
+  const originalAmountPaise = Number(order.originalAmountPaise ?? order.amountPaise ?? 0);
+  const totalAmountPaise = Number(order.amountPaise || 0);
+  const discountAmountPaise = Number(order.discountAmountPaise || 0);
+  const invoiceRecord = getOrCreateInvoiceRecord({
+    contextType: 'membership_order',
+    contextRef: order.orderId,
+    userId: order.userId,
+    paymentOrderId: order.orderId,
+    paymentReference: order.paymentReference || '',
+    totalAmountPaise,
+    metadata: {
+      planId: order.planId,
+      peopleCount: order.peopleCount,
+    },
+  });
+
+  const items = [
+    {
+      label: plan?.name || 'Membership',
+      description: `${Number(order.peopleCount || 1)} member${Number(order.peopleCount || 1) === 1 ? '' : 's'} covered`,
+      amountPaise: originalAmountPaise,
+    },
+  ];
+  for (const member of memberDetails) {
+    items.push({
+      label: `Covered Member: ${String(member?.name || 'Member').trim() || 'Member'}`,
+      description: [member?.email, member?.contactNumber].filter(Boolean).join(' | '),
+      amountPaise: 0,
+    });
+  }
+
+  return {
+    invoiceRecord,
+    fileName: `invoice-${sanitizeInvoiceFileName(invoiceRecord.invoiceNumber)}.pdf`,
+    issuedAt: order.paidAt || invoiceRecord.issuedAt,
+    title: 'Membership Invoice',
+    customer: {
+      name: order.userName || 'User',
+      email: order.userEmail || '',
+      phone: order.userMobile || '',
+    },
+    payment: {
+      orderId: order.orderId,
+      reference: order.paymentReference || '',
+      paidAt: order.paidAt || '',
+    },
+    items,
+    subtotalAmountPaise: originalAmountPaise,
+    discountAmountPaise,
+    totalAmountPaise,
+    footerNote:
+      order.couponCode
+        ? `Membership discount applied using coupon code ${order.couponCode}.`
+        : 'Membership invoice generated successfully.',
+  };
 }
 
 function getCurrentSqliteTimestamp() {
@@ -6609,6 +7449,12 @@ function migrate() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS app_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS coupon_redemptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       coupon_id INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
@@ -6631,6 +7477,36 @@ function migrate() {
       payment_reference TEXT,
       paid_at TEXT,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS service_payment_orders (
+      order_id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      booking_id INTEGER REFERENCES bookings(id) ON DELETE SET NULL,
+      booking_group_id TEXT,
+      original_amount_paise INTEGER NOT NULL,
+      amount_paise INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payment_reference TEXT,
+      paid_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_number TEXT NOT NULL UNIQUE,
+      context_type TEXT NOT NULL,
+      context_ref TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      payment_order_id TEXT,
+      payment_reference TEXT,
+      total_amount_paise INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'INR',
+      metadata_json TEXT,
+      issued_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(context_type, context_ref)
     );
 
     CREATE TABLE IF NOT EXISTS admin_discount_phones (
@@ -6777,6 +7653,14 @@ function migrate() {
     db.exec('ALTER TABLE membership_payment_orders ADD COLUMN coupon_code TEXT');
   }
 
+  if (hasTable('service_payment_orders') && !hasColumn('service_payment_orders', 'booking_id')) {
+    db.exec('ALTER TABLE service_payment_orders ADD COLUMN booking_id INTEGER REFERENCES bookings(id) ON DELETE SET NULL');
+  }
+
+  if (hasTable('service_payment_orders') && !hasColumn('service_payment_orders', 'booking_group_id')) {
+    db.exec('ALTER TABLE service_payment_orders ADD COLUMN booking_group_id TEXT');
+  }
+
   if (hasTable('coupons') && !hasColumn('coupons', 'recipient_email')) {
     db.exec('ALTER TABLE coupons ADD COLUMN recipient_email TEXT');
   }
@@ -6820,6 +7704,12 @@ function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_cart_payment_orders_user_status
       ON cart_payment_orders(user_id, status, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_service_payment_orders_user_status
+      ON service_payment_orders(user_id, status, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_invoices_context
+      ON invoices(context_type, context_ref);
   `);
 
   if (!hasColumn('bookings', 'payment_status')) {
@@ -6852,6 +7742,15 @@ function migrate() {
     SET original_amount_paise = amount_paise
     WHERE original_amount_paise IS NULL;
   `);
+
+  const settingsUpsert = db.prepare(
+    `INSERT INTO app_settings (setting_key, setting_value, updated_at)
+     VALUES (?, ?, datetime('now'))
+     ON CONFLICT(setting_key) DO NOTHING`
+  );
+  Object.entries(DEFAULT_INVOICE_SETTINGS).forEach(([key, value]) => {
+    settingsUpsert.run(key, String(value || '').trim());
+  });
 
   db.exec("UPDATE users SET role = 'user' WHERE role IS NULL OR role = ''");
   db.exec("UPDATE users SET role = 'user' WHERE role = 'doctor'");
